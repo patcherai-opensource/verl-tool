@@ -66,21 +66,27 @@ def main(
         def process_fn(example, idx):
             question_raw = example.pop('question')
 
-            if not add_execution_prompt:
-                if not detaield_instruction:
-                    question = question_raw + ' ' + naive_instruction
-                else:
-                    question = question_raw + ' ' + coder_instruction
-            else:
-                question = question_raw + ' ' + execution_prompt
+            # if not add_execution_prompt:
+            #     if not detaield_instruction:
+            #         question = question_raw + ' ' + naive_instruction
+            #     else:
+            #         question = question_raw + ' ' + coder_instruction
+            # else:
+            #     question = question_raw + ' ' + execution_prompt
             
             tests = example.pop('tests')
             data = {
                 "data_source": "acecoder",
-                "prompt": [{
-                    "role": "user",
-                    "content": question,
-                }],
+                "prompt": [
+                    {
+                        "role": "system",
+                        "content": execution_prompt if add_execution_prompt else coder_instruction,
+                    },
+                    {
+                        "role": "user",
+                        "content": question_raw,
+                    }
+                ],
                 "ability": "code",
                 "reward_model": {
                     "style": "rule",
@@ -115,5 +121,5 @@ if __name__ == '__main__':
     
 """
 python examples/data_preprocess/acecoder.py --dataset_path CodeDPO/AceCoderV2-mini-processed --local_dir data/acecoder --add_execution_prompt
-python examples/data_preprocess/acecoder.py --dataset_path CodeDPO/AceCoderV2-150K-processed --local_dir data/acecoder
+python examples/data_preprocess/acecoder.py --dataset_path CodeDPO/AceCoderV2-150K-processed --local_dir data/acecoder --add_execution_prompt
 """

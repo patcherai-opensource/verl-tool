@@ -5,6 +5,7 @@ An unified and easy-to-extend tool-agent training framework based on verl.
 ```bash
 pip install uv # if not installed
 uv sync
+git submodule update --init --recursive
 uv pip install -e verl
 uv pip install vllm==0.7.3
 uv pip install flash-attn --no-build-isolation
@@ -32,6 +33,9 @@ python -m verl_tool.servers.tests.test_base # Run the tests
 - [ ] Add wandb logging statistics
 - [ ] Add saving logic for every step's sampling results and observations for inspection
 
-## Contribution to tool libraries
+## Contribution
+### Contribution to tool libraries
 Go to the [./verl_tool/servers/tools](./verl_tool/servers/tools) directory. Each tool has a name (e.g. `base`, `python_code`), the name of tool is exactly the name of the python file that you should create in the directory. See [./verl_tool/servers/tools/python_code.py](./verl_tool/servers/tools/python_code.py) for an example.
 
+### New reward manager
+Go to the [./verl_tool/agent_workers/reward_manager](./verl_tool/agent_workers/reward_manager) directory. Adding your new reward manager. import it in the `__init__.py` file and in `verl_tool/trainer/main_ppo.py` file add your reward manager importing logic.

@@ -15,3 +15,6 @@ packages = ["verl_tool"]  # Explicitly specify only the verl_tool package
 tool_browser = [
     "mini_webarena @ git+https://github.com/cogito233/mini_webarena.git",
 ]
+acecoder = [
+    "AceCoder @ git+https://github.com/TIGER-AI-Lab/AceCoder.git@dev",
+]

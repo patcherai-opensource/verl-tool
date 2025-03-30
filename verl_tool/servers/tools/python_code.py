@@ -90,5 +90,6 @@ class PythonCodeTool(BaseTool):
         else:
             observation = _execute_program(action, timeout=self.timeout)
             done = False
+        observation = f"\nHere is the returned execution results of the above python codes:\n<output>{observation}</output>\n"
         return observation, done, is_valid
     

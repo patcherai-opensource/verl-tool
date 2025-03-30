@@ -105,7 +105,7 @@ def main(
     # Print all registered tools
     print("Available Tools:")
     for tool in ALL_TOOLS:
-        print(f"  - {tool}" + " (serving)" if tool in tools else "")
+        print(f"  - {tool}", " (serving)" if tool in tools else "")
     
     @app.post("/get_observation")
     async def get_observation(request: Request):
