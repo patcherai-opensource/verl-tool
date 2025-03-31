@@ -1,20 +1,19 @@
 set -x
-dataset_name=AceCoderV2-mini-processed
-train_data=data/acecoder/$dataset_name/train.parquet
-val_data=data/acecoder/$dataset_name/test.parquet
-model_name=Qwen/Qwen2.5-Coder-3B-Instruct
+dataset_name=WikiRL
+train_data=data/wikiQA/$dataset_name/train.parquet
+val_data=data/wikiQA/$dataset_name/test.parquet
+model_name=Qwen/Qwen2.5-Coder-7B-Instruct
 rl_alg=grpo # gae(ppo) or grpo, if grpo, then better set n>1 otherwise the group norm can not be effective
-n_gpus_per_node=2
+n_gpus_per_node=4
 n_nodes=1
-n=2
-batch_size=32
-ppo_mini_batch_size=16
+n=8
+batch_size=128
+ppo_mini_batch_size=64
 max_prompt_length=3072
 max_response_length=2048
 max_obs_length=512
 temperature=0.9
 strategy="fsdp_agent" # remove _agent for normal verl behavior
-# strategy="ddp" # remove _agent for normal verl behavior
 valid_actions="[python]" # "[answer,python]" are two valid actions, they are used to determine the stop token of each action, which are </answer> and </python> respectively
 
 model_pretty_name=$(echo $model_name | tr '/' '_' | tr '[:upper:]' '[:lower:]')
@@ -68,7 +67,7 @@ PYTHONUNBUFFERED=1 python3 -m verl_tool.trainer.main_ppo \
     critic.ppo_micro_batch_size_per_gpu=8 \
     algorithm.kl_ctrl.kl_coef=0.001 \
     trainer.logger=['console','wandb'] \
-    trainer.project_name='acecoder' \
+    trainer.project_name='wikiRL' \
     trainer.experiment_name=$run_name \
     +trainer.val_before_train=False \
     trainer.default_hdfs_dir=null \

@@ -113,7 +113,6 @@ class AceCoderRewardManager:
 
         print(data)
         exit(1)
-        
         # If there is rm score, we directly return rm score. Otherwise, we compute via rm_score_fn
         if 'rm_scores' in data.batch.keys():
             return data.batch['rm_scores']
