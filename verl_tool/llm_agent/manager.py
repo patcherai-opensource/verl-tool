@@ -273,7 +273,7 @@ class AgentActorManager:
         """Compose final generation output."""
         final_output = right_side.copy()
         final_output['prompts'] = left_side['input_ids']
-        
+
         # padding responses length to max_response_length
         if final_output['responses'].shape[1] < self.config.max_response_length:
             final_output['responses'] = self.tensor_fn.pad_tensor(
@@ -324,7 +324,12 @@ class AgentActorManager:
         }
         print(f"Sending request to {self.config.tool_server_url}")
         print(f" - Number of non-finished actions: {len([x for x in do_actions if not x])} / {len(do_actions)}")
+        print("self.config.tool_server_url", self.config.tool_server_url)
+        print("data", data)
+        print("#"*100)
         response = requests.post(self.config.tool_server_url, json=data)
+        print("$$$$ response", response, "$$$$")
+        print("#"*100)
         active_observations = response.json()['observations']
         active_dones = [int(x) for x in response.json()['dones']]
         active_valid_actions = [int(x) for x in response.json()['valids']]

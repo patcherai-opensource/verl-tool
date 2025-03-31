@@ -23,9 +23,10 @@ export VERL_RUN_ID=$run_name
 export VLLM_ATTENTION_BACKEND=XFORMERS
 
 host=0.0.0.0
-port=$(shuf -i 30000-31000 -n 1)
+# port=$(shuf -i 30000-31000 -n 1)
+port=30769
 tool_server_url=http://$host:$port/get_observation
-python -m verl_tool.servers.serve --host $host --port $port --tool_type "python_code" &
+# python -m verl_tool.servers.serve --host $host --port $port --tool_type "python_code" &
 server_pid=$!
 echo "Server (pid=$server_pid) started at $tool_server_url"
 

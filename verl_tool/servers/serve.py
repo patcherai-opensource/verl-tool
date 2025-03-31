@@ -14,7 +14,13 @@ logger = logging.getLogger(__name__)
 def parse_agent_request(data):
     trajectory_ids = data.get("trajectory_ids")
     actions = data.get("actions")
+    print(data)
+    print("#"*100 + "Data")
+    print(trajectory_ids)
+    print("#"*100)
+    print(actions)
     extra_fields_keys = [key for key in data if key not in ["trajectory_ids", "actions"]]
+    print(extra_fields_keys)
     extra_fields = [{key: data.get(key)[i] for key in extra_fields_keys} for i in range(len(actions))]
     assert len(trajectory_ids) == len(actions), f"Number of trajectory_ids ({len(trajectory_ids)}) does not match number of actions ({len(actions)})"
     if not extra_fields:

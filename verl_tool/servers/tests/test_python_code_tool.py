@@ -54,7 +54,7 @@ def _send_test_request(url, trajectory_id, action, test_name):
     payload = {
         "trajectory_ids": [trajectory_id],
         "actions": [action],
-        "extra_data": {}
+        "extra_fields": [{}]
     }
     
     try:
