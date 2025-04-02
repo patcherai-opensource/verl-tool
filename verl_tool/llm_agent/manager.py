@@ -178,6 +178,8 @@ class AgentActorManager:
             "include_stop_str_in_output": True,
             "detokenize": True
         }
+
+        print("#### gen_batch ####", gen_batch)
         # Main generation loop
         for step in range(self.config.max_turns):
             if not active_mask.sum():
@@ -188,11 +190,14 @@ class AgentActorManager:
                 rollings.batch,
                 keys=['input_ids', 'attention_mask', 'position_ids']
             )
-            
+            print("#### rollings.batch ####", rollings.batch)
+
             rollings_active = DataProto.from_dict({
                 k: v[active_mask] for k, v in rollings.batch.items()
             })
             rollings_active.meta_info.update(ori_meta_info)
+
+            # Generate the result
             with self.actor_rollout_wg.rollout.update_sampling_params(**agent_sampling_params):
                 gen_output = self.actor_rollout_wg.rollout.generate_sequences(rollings_active)
 
@@ -330,6 +335,7 @@ class AgentActorManager:
         response = requests.post(self.config.tool_server_url, json=data)
         print("$$$$ response", response, "$$$$")
         print("#"*100)
+        exit(1)
         active_observations = response.json()['observations']
         active_dones = [int(x) for x in response.json()['dones']]
         active_valid_actions = [int(x) for x in response.json()['valids']]

@@ -1,7 +1,21 @@
 import nltk
 import json
+import torch
+
+from verl import DataProto
+from verl.utils.reward_score import _default_compute_score
+
+import os
+import time
+import asyncio
+import regex as re
+from pathlib import Path
+from concurrent.futures import ProcessPoolExecutor
+from functools import partial
+
 from nltk.tokenize import word_tokenize
 from difflib import SequenceMatcher
+
 
 def clean_text(text: str) -> str:
     text = text.strip().lower()
@@ -114,8 +128,8 @@ class WikiQARewardManager:
     This class computes a combined reward for each predicted answer by comparing it with
     the ground truth answers. The final reward is a weighted combination of a fuzzy matching
     score and a structure score.
-    """
-    def __init__(self, fuzzy_weight: float = 0.7, structure_weight: float = 0.3):
+    # """
+    def __init__(self, tokenizer, num_examine, compute_score=None) -> None:
         """
         Initialize the WikiQARewardManager.
 
@@ -123,9 +137,15 @@ class WikiQARewardManager:
         - fuzzy_weight: The weight applied to the fuzzy matching score.
         - structure_weight: The weight applied to the structure score.
         """
-        self.fuzzy_weight = fuzzy_weight
-        self.structure_weight = structure_weight
-
+        self.tokenizer = tokenizer
+        self.num_examine = num_examine  # the number of batches of decoded responses to print to the console
+        self.compute_score = compute_score or _default_compute_score
+        print("==== Init WikiQARewardManager ====")
+        print("self.tokenizer", self.tokenizer)
+        print("self.num_examine", self.num_examine)
+        print("self.compute_score", self.compute_score)
+        self.fuzzy_weight = 0.7
+        self.structure_weight = 0.3
     def compute_reward(self, pred: str, ground_truths: list) -> float:
         """
         Compute the reward for a single prediction.
@@ -151,7 +171,7 @@ class WikiQARewardManager:
         final_score = self.fuzzy_weight * max_fuzzy + self.structure_weight * struct_score
         return final_score
 
-    def __call__(self, data) -> torch.Tensor:
+    def __call__(self, data:DataProto):
         """
         Compute rewards for a batch of data samples.
 
@@ -167,6 +187,7 @@ class WikiQARewardManager:
         - reward_tensor: A torch.Tensor containing the computed rewards for each sample.
         """
         # Retrieve the list of predicted responses.
+        print("==== Call WikiQARewardManager ====")
         print(data)
         exit(1)
         predictions = data.batch['responses']

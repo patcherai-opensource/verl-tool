@@ -111,7 +111,12 @@ class AceCoderRewardManager:
     def __call__(self, data: DataProto):
         """We will expand this function gradually based on the available datasets"""
 
-        print(data)
+        print("DataProto")
+        for key, tensor in data.batch.items():
+            print(f"{key}: {tensor.shape}")
+        print("\nMeta Info:")
+        for key, value in data.meta_info.items():
+            print(f"{key}: {value}")
         exit(1)
         # If there is rm score, we directly return rm score. Otherwise, we compute via rm_score_fn
         if 'rm_scores' in data.batch.keys():

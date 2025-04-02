@@ -1,20 +1,25 @@
 set -x
-dataset_name=WikiRL
-train_data=data/wikiQA/$dataset_name/train.parquet
-val_data=data/wikiQA/$dataset_name/test.parquet
-model_name=Qwen/Qwen2.5-Coder-7B-Instruct
+dataset_name=wikiQA
+train_data=data/$dataset_name/train.parquet
+val_data=data/$dataset_name/test.parquet
+# model_name=Qwen/Qwen2.5-3B
+# model_name=/home/zhiheng/cogito/base_models/qwen2.5-0.5b-wiki
+# model_name=/home/zhiheng/verl/experiments/wiki/qwen2.5-1.5b
+model_name=Qwen/Qwen2.5-3B-Instruct
 rl_alg=grpo # gae(ppo) or grpo, if grpo, then better set n>1 otherwise the group norm can not be effective
-n_gpus_per_node=4
+n_gpus_per_node=2
 n_nodes=1
-n=8
-batch_size=128
-ppo_mini_batch_size=64
-max_prompt_length=3072
-max_response_length=2048
-max_obs_length=512
+n=2
+batch_size=2
+ppo_mini_batch_size=2
+max_prompt_length=4096
+max_response_length=4096
+max_obs_length=4096
 temperature=0.9
 strategy="fsdp_agent" # remove _agent for normal verl behavior
-valid_actions="[python]" # "[answer,python]" are two valid actions, they are used to determine the stop token of each action, which are </answer> and </python> respectively
+valid_actions="[browser]" # "[answer,python]" are two valid actions, they are used to determine the stop
+token of
+# each action, which are </answer> and </python> respectively
 
 model_pretty_name=$(echo $model_name | tr '/' '_' | tr '[:upper:]' '[:lower:]')
 run_name="${model_pretty_name}-${rl_alg}-n${n}-b${batch_size}-t${temperature}"
@@ -22,9 +27,10 @@ export VERL_RUN_ID=$run_name
 export VLLM_ATTENTION_BACKEND=XFORMERS
 
 host=0.0.0.0
-port=$(shuf -i 30000-31000 -n 1)
+# port=$(shuf -i 30000-31000 -n 1)
+port=30814
 tool_server_url=http://$host:$port/get_observation
-python -m verl_tool.servers.serve --host $host --port $port --tool_type "python_code" &
+# python -m verl_tool.servers.serve --host $host --port $port --tool_type "python_code" &
 server_pid=$!
 echo "Server (pid=$server_pid) started at $tool_server_url"
 
@@ -39,7 +45,7 @@ PYTHONUNBUFFERED=1 python3 -m verl_tool.trainer.main_ppo \
     data.train_batch_size=$batch_size \
     data.max_prompt_length=$max_prompt_length \
     data.max_response_length=$max_response_length \
-    reward_model.reward_manager=acecoder \
+    reward_model.reward_manager=wikiRL \
     actor_rollout_ref.model.path=$model_name \
     actor_rollout_ref.actor.optim.lr=1e-6 \
     actor_rollout_ref.actor.ppo_mini_batch_size=$ppo_mini_batch_size \
@@ -78,5 +84,5 @@ PYTHONUNBUFFERED=1 python3 -m verl_tool.trainer.main_ppo \
     trainer.total_epochs=5
 
 
-pkill -P -9 $server_pid
-kill -9 $kill $server_pid
+#pkill -P -9 $server_pid
+#kill -9 $kill $server_pid

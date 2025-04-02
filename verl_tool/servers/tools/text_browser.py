@@ -87,7 +87,7 @@ class TextBrowserTool(BaseTool):
         return ("Usage instructions for TextBrowser. This code is based on mini_webarena, using playwright to get "
                 "accessibility tree for LLMs agent easier access. The code is modified from AutoWebGLM. To get start, run `pip install -e .` under the mini_webarena repo.")
 
-    def __init__(self, num_workers=1, store_path='env_store.db'):
+    def __init__(self, num_workers=16, store_path='env_store.db'):
         self.num_workers = num_workers
         registered_tools[self.tool_type] = self.__class__
         self.object_store = ObjectStore(store_path)
@@ -125,12 +125,14 @@ class TextBrowserTool(BaseTool):
         # print(trajectory_id, action, extra_field)
         from mini_webarena.env_worker import WikiQAEnv
         import copy
+        print("#### extra_field ####", extra_field)
+        extra_field = extra_field['extra_fields']
         env_state = self.load_env(trajectory_id)
         if env_state.get("trajectory_id") is not None: # New Environment, need start
             question = extra_field['question'] if extra_field['question'] is not None else "placeholder"
             gt = extra_field['gt'] if extra_field['gt'] is not None else "placeholder"
             url = extra_field['url']
-            env = WikiQAEnv(question, gt, url = url)
+            env = WikiQAEnv(question, gt, url = url, prompt_format = "full")
             env_state = copy.deepcopy(env.get_state())
             self.save_env(trajectory_id, env_state)
             if action is None:
@@ -139,7 +141,7 @@ class TextBrowserTool(BaseTool):
                 return observation, False, True
             env.close()
             del env
-        env = WikiQAEnv(env_state["question"], env_state["gt"], url=env_state["url"])
+        env = WikiQAEnv(env_state["question"], env_state["gt"], url=env_state["url"], prompt_format = "full")
         env.load_state(env_state)
         observation, _, done, _ = env.step(action)
         if done:
