@@ -70,7 +70,7 @@ class AgentActorManager:
         inputs.non_tensor_batch['traj_ids'] = np.array([str(uuid.uuid4()) for _ in range(len(inputs.batch))], dtype=object)
         return inputs
         
-    def _postprocess_responses(self, responses: torch.Tensor) -> torch.Tensor:
+    def _postprocess_responses(self, responses: torch.Tensor, action_step: int) -> torch.Tensor:
         """Process responses to stop at python operation or answer operation."""
         responses_str = self.tokenizer.batch_decode(
             responses, 
@@ -79,12 +79,15 @@ class AgentActorManager:
         do_actions = []
         for i, resp in enumerate(responses_str):
             resp = resp.strip(' \n')
-            has_action = False
-            for j in range(len(self.action_stop_tokens)):
-                if resp.endswith(self.action_stop_tokens[j]):
-                    has_action = True
-                    responses_str[i] = resp.split(self.action_stop_tokens[j])[0] + self.action_stop_tokens[j]
-                    break
+            if self.config.no_action_as_stop and action_step >= self.config.min_action_num:
+                has_action = False
+                for j in range(len(self.action_stop_tokens)):
+                    if resp.endswith(self.action_stop_tokens[j]):
+                        has_action = True
+                        responses_str[i] = resp.split(self.action_stop_tokens[j])[0] + self.action_stop_tokens[j]
+                        break
+            else:
+                has_action = True
             do_actions.append(has_action)
         responses = self._batch_tokenize(responses_str).to(torch.int64)
         return responses, responses_str, do_actions
@@ -128,34 +131,86 @@ class AgentActorManager:
         effective_len = new_attention_mask.sum(dim=1).max()
         max_len = min(self.config.max_prompt_length, effective_len)
         
-        return DataProto.from_dict({
+        new_rollings = DataProto.from_dict({
             'input_ids': new_input_ids[:, -max_len:],
             'position_ids': new_position_ids[:, -max_len:],
             'attention_mask': new_attention_mask[:, -max_len:]
         })
+        
+        new_rollings.meta_info.update(rollings.meta_info)
+        
+        return new_rollings
+    
+    def _info_masked_concatenate_with_padding(self, 
+                prompt: torch.Tensor, 
+                prompt_with_mask: torch.Tensor, 
+                response: torch.Tensor, 
+                info: torch.Tensor = None,
+                pad_to_left: bool = True
+            ) -> torch.Tensor:
+        """Concatenate tensors and handle padding. Additionally, create a mask (info_mask) to cover the information block if it exists."""
+        
+        # move `response` and `info` tensor to the same device as `prompt`
+        response = response.to(prompt.device)
+        if info is not None:
+            info = info.to(prompt.device)
+        
+        # set padding ids
+        pad_id = self.tokenizer.pad_token_id
+        tensors = [prompt, response]
+        tensors_with_mask = [prompt_with_mask, response]
+        
+        # info: observations, need to be masked
+        if info is not None:
+            # for non-masked tensors, just append the observation
+            tensors.append(info)
+            
+            # assemble the mask for the observation part
+            info_mask = torch.full(info.size(), pad_id, dtype=info.dtype, device=info.device) # information mask
+            # extend the mask for the observation part, to update masked tensors
+            tensors_with_mask.append(info_mask)    
+        
+        concatenated = torch.cat(tensors, dim=1)
+        concatenated_with_info = torch.cat(tensors_with_mask, dim=1)
+        
+        mask = concatenated != pad_id if pad_to_left else concatenated == pad_id
+        sorted_indices = mask.to(torch.int64).argsort(dim=1, stable=True)
+        padded_tensor = concatenated.gather(1, sorted_indices)
+        padded_tensor_with_info = concatenated_with_info.gather(1, sorted_indices)
+
+        return padded_tensor, padded_tensor_with_info
 
     def _update_right_side(self, right_side: Dict, 
                           cur_responses: torch.Tensor,
                           next_obs_ids: torch.Tensor = None) -> Dict:
         """Update right side state."""
-        if next_obs_ids != None:
-            responses = self.tensor_fn.concatenate_with_padding([
-                right_side['responses'],
-                cur_responses,
-                next_obs_ids
-            ], pad_to_left=False)
-        else:
-            responses = self.tensor_fn.concatenate_with_padding([
-                right_side['responses'],
-                cur_responses,
-            ], pad_to_left=False)
         
+        # observation exists, perform concatenation and masked concatenation
+        if next_obs_ids != None:
+            responses, responses_with_info_mask = self._info_masked_concatenate_with_padding(
+                    right_side['responses'],
+                    right_side['responses_with_info_mask'],
+                    cur_responses,
+                    next_obs_ids, 
+                    pad_to_left=False
+                )
+        else:
+            # no observation, only concatenate the response with generated response
+            responses, responses_with_info_mask = self._info_masked_concatenate_with_padding(
+                    right_side['responses'],
+                    right_side['responses_with_info_mask'],
+                    cur_responses,
+                    pad_to_left=False
+                )
+            
         effective_len = self.tensor_fn.create_attention_mask(responses).sum(dim=1).max()
         max_len = min(self.config.max_response_length, effective_len)
         
-        return {'responses': responses[:, :max_len]}
+        # return the updated responses along with its masked version
+        return {'responses': responses[:, :max_len], 'responses_with_info_mask': responses_with_info_mask[:, :max_len]}
+        
 
-    def run_llm_loop(self, gen_batch) -> Tuple[Dict, Dict]:
+    def run_llm_loop(self, gen_batch: DataProto) -> Tuple[Dict, Dict]:
         """Run main LLM generation loop."""
         ori_meta_info = gen_batch.meta_info
         gen_batch = self._preprocess_inputs(gen_batch)
@@ -163,7 +218,8 @@ class AgentActorManager:
         initial_input_ids = gen_batch.batch['input_ids'][:, -self.config.max_start_length:].clone()
         
         original_left_side = {'input_ids': initial_input_ids[:, -self.config.max_start_length:]}
-        original_right_side = {'responses': initial_input_ids[:, []]}
+        # original_right_side = {'responses': initial_input_ids[:, []]}
+        original_right_side = {'responses': initial_input_ids[:, []], 'responses_with_info_mask': initial_input_ids[:, []]}
         
         turns_stats = torch.ones(gen_batch.batch['input_ids'].shape[0], dtype=torch.int)
         valid_action_stats = torch.zeros(gen_batch.batch['input_ids'].shape[0], dtype=torch.int)
@@ -194,15 +250,13 @@ class AgentActorManager:
 
             rollings_active = DataProto.from_dict({
                 k: v[active_mask] for k, v in rollings.batch.items()
-            })
-            rollings_active.meta_info.update(ori_meta_info)
+            }, meta_info=ori_meta_info)
 
-            # Generate the result
             with self.actor_rollout_wg.rollout.update_sampling_params(**agent_sampling_params):
                 gen_output = self.actor_rollout_wg.rollout.generate_sequences(rollings_active)
-
+            
             meta_info = gen_output.meta_info            
-            responses_ids, responses_str, do_actions = self._postprocess_responses(gen_output.batch['responses'])
+            responses_ids, responses_str, do_actions = self._postprocess_responses(gen_output.batch['responses'], step)
             responses_ids, _ = self.tensor_fn._example_level_pad(responses_ids, responses_str, active_mask)
             print(f"Number of active trajectories: {active_mask.sum().item()}")
             print(f"Length of responses: {responses_ids.shape[1]}")
@@ -240,13 +294,12 @@ class AgentActorManager:
 
             rollings_active = DataProto.from_dict({
                 k: v[active_mask] for k, v in rollings.batch.items()
-            })
-            rollings_active.meta_info.update(ori_meta_info)
+            }, meta_info=ori_meta_info)
             with self.actor_rollout_wg.rollout.update_sampling_params(**agent_sampling_params):
                 gen_output = self.actor_rollout_wg.rollout.generate_sequences(rollings_active)
 
             meta_info = gen_output.meta_info            
-            responses_ids, responses_str, do_actions = self._postprocess_responses(gen_output.batch['responses'])
+            responses_ids, responses_str, do_actions = self._postprocess_responses(gen_output.batch['responses'], step)
             responses_ids, _ = self.tensor_fn._example_level_pad(responses_ids, responses_str, active_mask)
 
             # Execute in environment and process observations
@@ -287,18 +340,33 @@ class AgentActorManager:
                 padding_side='right'
             )
         
+        # padding response_with_info_mask length to max_response_length 
+        if final_output['responses_with_info_mask'].shape[1] < self.config.max_response_length:
+            final_output['responses_with_info_mask'] = self.tensor_fn.pad_tensor(
+                final_output['responses_with_info_mask'],
+                max_length=self.config.max_response_length,
+                padding_side='right'
+            )
+        
         # Combine input IDs
         final_output['input_ids'] = torch.cat([
             left_side['input_ids'],
             final_output['responses']
         ], dim=1)
         
-        # Create attention mask and position ids
+        # Create attention mask 
         final_output['attention_mask'] = torch.cat([
             self.tensor_fn.create_attention_mask(left_side['input_ids']),
             self.tensor_fn.create_attention_mask(final_output['responses'])
         ], dim=1)
         
+        # Create observation mask 
+        final_output['info_mask'] = torch.cat([
+            self.tensor_fn.create_attention_mask(left_side['input_ids']),
+            self.tensor_fn.create_attention_mask(final_output['responses_with_info_mask'])
+        ], dim=1)
+        
+        # Create position ids
         final_output['position_ids'] = self.tensor_fn.create_position_ids(
             final_output['attention_mask']
         )
@@ -325,7 +393,7 @@ class AgentActorManager:
         data = {
             "trajectory_ids": active_uids,
             "actions": responses,
-            "finish": [not do_action for do_action in do_actions], # if do_action is False, then it is a finish action, finishing the trajectory
+            "finish": [not do_action for do_action in do_actions], # if do_action is False, then it is a finish action, finishing the trajectory,
         }
         print(f"Sending request to {self.config.tool_server_url}")
         print(f" - Number of non-finished actions: {len([x for x in do_actions if not x])} / {len(do_actions)}")
@@ -340,7 +408,7 @@ class AgentActorManager:
         active_dones = [int(x) for x in response.json()['dones']]
         active_valid_actions = [int(x) for x in response.json()['valids']]
         print("Received observations from tool server. Samples:", len(active_observations))
-        print(f" - Number of valid actions: {len([x for x in active_valid_actions if x])} / {len(active_valid_actions)}")
+        print(f" - Number of valid actions (exclusing finish action): {len([x for x in active_valid_actions if x])} / {len(active_valid_actions)}")
         print(f" - Number of dones: {len([x for x in active_dones if x])} / {len(active_dones)}")
         print("Example observations:")
         non_empty_observations = [obs for obs in active_observations if obs]

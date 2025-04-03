@@ -3,10 +3,13 @@ import re
 import fire
 import uvicorn
 import logging
+import asyncio
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from .tools import get_tool_cls, ALL_TOOLS
 from typing import List, Union
+from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor
+thread_pool = None
 
 logger = logging.getLogger(__name__)
 
@@ -36,7 +39,8 @@ def parse_agent_request(data):
 def get_tools_usage_instructions(tools):
     usage_instructions = {}
     for tool_type, tool in tools.items():
-        usage_instructions[tool_type] = tool.get_usage_inst()
+        if not tool_type in ["finish", "base"]:
+            usage_instructions[tool_type] = tool.get_usage_inst()
     message = "Your action did not match any of the available tools, please use one of the following tools: \n"
     message += "\n".join([f"- {tool_type}: {usage_instructions[tool_type]}" for tool_type in usage_instructions])
     return message
@@ -64,16 +68,17 @@ def get_multi_tool_observations(tools, trajectory_ids, actions, extra_fields):
     all_dones = [False for _ in range(len(actions))]
     all_valids = [False for _ in range(len(actions))]
     for tool_type in all_tool_types:
-        tool = tools[tool_type]
         tool_indices = [i for i, t in enumerate(tool_type_each_action) if t == tool_type]
+        tool_actions = [actions[i] for i in tool_indices]
         if tool_type is None:
+            print(f"Warning: {tool_actions} did not match any tool, using default tool")
             # not a single tool matched the action
-            observations = [get_tools_usage_instructions(tools) for _ in range(len(actions))]
-            dones = [False for _ in range(len(actions))]
-            valids = [False for _ in range(len(actions))]
+            observations = [get_tools_usage_instructions(tools) for _ in range(len(tool_actions))]
+            dones = [False for _ in range(len(tool_actions))]
+            valids = [False for _ in range(len(tool_actions))]
         else:
+            tool = tools[tool_type]
             tool_trajectory_ids = [trajectory_ids[i] for i in tool_indices]
-            tool_actions = [actions[i] for i in tool_indices]
             tool_extra_fields = [extra_fields[i] for i in tool_indices]
             observations, dones, valids = tool.get_observations(tool_trajectory_ids, tool_actions, tool_extra_fields)
         for i, idx in enumerate(tool_indices):
@@ -81,6 +86,19 @@ def get_multi_tool_observations(tools, trajectory_ids, actions, extra_fields):
             all_dones[idx] = dones[i]
             all_valids[idx] = valids[i]
     return all_observations, all_dones, all_valids
+
+
+        
+async def async_get_multi_tool_observations(tools, trajectory_ids, actions, extra_fields):
+    loop = asyncio.get_running_loop()
+    return await loop.run_in_executor(
+        thread_pool, 
+        get_multi_tool_observations,
+        tools,
+        trajectory_ids,
+        actions,
+        extra_fields,
+    )
 
 def main(
     host: str = "0.0.0.0",
@@ -98,7 +116,9 @@ def main(
         tool_type: The tool type(s) to use, separated by commas (default: base)
 
     """
-
+    global thread_pool
+    thread_pool = ThreadPoolExecutor(max_workers=8)
+    
     app = FastAPI()
     if isinstance(tool_type, str):
         tool_type = (tool_type,)
@@ -117,7 +137,7 @@ def main(
     async def get_observation(request: Request):
         data = await request.json()
         parsed_data = parse_agent_request(data)
-        observations, dones, valids = get_multi_tool_observations(tools, **parsed_data)
+        observations, dones, valids = await async_get_multi_tool_observations(tools, **parsed_data)
         result = {"observations": observations, "dones": dones, "valids": valids}
         logger.info(f"Sent JSON: {result}")
         return JSONResponse(result)

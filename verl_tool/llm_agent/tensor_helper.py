@@ -59,7 +59,9 @@ class TensorHelper:
         assert active_mask.sum() == responses.shape[0], f"Active mask sum: {active_mask.sum()}, responses shape: {responses.shape}"
         # Create masked responses tensor
         batch_size = active_mask.shape[0]
+        
         seq_len = responses.shape[1]
+        
         padded_responses = torch.full(
             (batch_size, seq_len), self.config.pad_token_id,
             dtype=responses.dtype, device=responses.device
