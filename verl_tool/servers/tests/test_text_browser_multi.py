@@ -10,6 +10,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+
 def _send_request(url, trajectory_id, action):
     """
     Internal helper function to send a single request to the server and log the response.
@@ -63,31 +64,51 @@ def _send_request(url, trajectory_id, action):
         return False
 
 
-def test_connection(url="http://localhost:5000/get_observation", trajectory_id="test-trajectory-001"):
+def test_connection(url="http://localhost:5000/get_observation"):
     """
     Test the connection to the tool server by sending multiple actions sequentially.
     """
+    def exec_actions(trajectory_id, actions):
+        """
+        Execute a list of actions for a given trajectory ID.
+        """
+        for action in actions:
+            success = _send_request(url, trajectory_id, action)
+            if not success:
+                return False
+        return True
 
     actions = [
-        "<think>balabalabalabala</think>\n```click [99]```",
-        "<think>balabala</think>```type [1407] [death row inmates in the US] [1]```",
-        "<think>balabala</think>```scroll [down]```",
+        # "<think>balabalabalabala</think>\n```click [99]```",
+        # "<think>balabala</think>```type [1407] [death row inmates in the US] [1]```",
+        "<think>balabala</think>```stop [Here is a stop message]```",
     ]
 
-    overall_success = True
-    for action in actions:
-        success = _send_request(url, trajectory_id, action)
-        if not success:
-            overall_success = False
+    trajectory_ids = []
+    for i in range(32):
+        trajectory_ids.append(f"trajectory-{i}")
+    from concurrent.futures import ThreadPoolExecutor
+    with ThreadPoolExecutor(max_workers=16) as executor:
+        future_to_id = {
+            executor.submit(exec_actions, trajectory_id, actions): trajectory_id
+            for trajectory_id in trajectory_ids
+        }
+        for future in as_completed(future_to_id):
+            trajectory_id = future_to_id[future]
+            try:
+                result = future.result()
+                logger.info(f"Result for {trajectory_id}: {result}")
+                results.append(result)
+            except Exception as e:
+                logger.error(f"Error for {trajectory_id}: {e}")
+                results.append(False)
 
-    return overall_success
-
-
+    return all(results)
 
 def main():
     """
     Entry point for the test script.
-    
+
     Start the Server:
     rm *.db* # Delete existed environment
     python -m verl_tool.servers.serve --tool_type text_browser --url=http://localhost:5000/get_observation
