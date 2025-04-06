@@ -16,16 +16,73 @@ def _send_request(url, trajectory_id, action):
     Returns True if successful, otherwise False.
     """
     payload = {
-        "trajectory_ids": [trajectory_id],
-        "actions": [action],
-        "extra_fields": [
+        "trajectory_ids": [
+                trajectory_id + '84f8dd9d-40a1-4f8f-aeb3-a614aeb41203',
+                trajectory_id + 'd18aeeee-96d2-45a4-b7a4-2c3feedffae4'
+            ],
+        "actions": [action, action],
+        'finish': [False, False],
+        'extra_fields': [
             {
-                "question": "when is the next deadpool movie being released",
-                "gt": "gt",
-                "url": "http://localhost:22015/wikipedia_en_all_maxi_2022-05/A/User:The_other_Kiwix_guy/Landing"
+                'golden_answers': ['Natalia Gastiain Tena'],
+                'gt': 'Natalia Gastiain Tena',
+                'id': 41214,
+                'index': 41214,
+                'question': 'who plays the wildling woman in game of thrones',
+                'split': 'train',
+                'url': 'http://localhost:22015/wikipedia_en_all_maxi_2022-05/A/User:The_other_Kiwix_guy/Landing'
+            },
+            {
+                'golden_answers': ['Natalia Gastiain Tena'],
+                'gt': 'Natalia Gastiain Tena',
+                'id': 41214,
+                'index': 41214,
+                'question': 'who plays the wildling woman in game of thrones',
+                'split': 'train',
+                'url': 'http://localhost:22015/wikipedia_en_all_maxi_2022-05/A/User:The_other_Kiwix_guy/Landing'
             }
         ]
     }
+    # payload = {
+    #     'trajectory_ids': [
+    #         '84f8dd9d-40a1-4f8f-aeb3-a614aeb41203',
+    #         'd18aeeee-96d2-45a4-b7a4-2c3feedffae4'
+    #     ],
+    #     'actions': [
+    #         (
+    #             '<think>To find out who plays the wildling woman in "Game of Thrones," '
+    #             'I should use the search functionality on this page. The search textbox has the ID 21. '
+    #             'I will type the query "Game of Thrones wildling woman actor" into the search box and press enter to search for the information.</think>\n'
+    #             '```type [21] [Game of Thrones wildling woman actor] [1]```�\']>;\n<thէ'
+    #         ),
+    #         (
+    #             '<think>To find out who plays the wildling woman in Game of Thrones, I should use the search functionality on this Wikipedia page. '
+    #             'There is a search textbox with the ID 21. I will type the query into this search box.</think>\n'
+    #             '```type [21] [wildling woman Game of Thrones actor] [1]```꙳'
+    #         )
+    #     ],
+    #     'finish': [False, False],
+    #     'extra_fields': [
+    #         {
+    #             'golden_answers': ['Natalia Gastiain Tena'],
+    #             'gt': 'Natalia Gastiain Tena',
+    #             'id': 41214,
+    #             'index': 41214,
+    #             'question': 'who plays the wildling woman in game of thrones',
+    #             'split': 'train',
+    #             'url': 'http://localhost:22015/wikipedia_en_all_maxi_2022-05/A/User:The_other_Kiwix_guy/Landing'
+    #         },
+    #         {
+    #             'golden_answers': ['Natalia Gastiain Tena'],
+    #             'gt': 'Natalia Gastiain Tena',
+    #             'id': 41214,
+    #             'index': 41214,
+    #             'question': 'who plays the wildling woman in game of thrones',
+    #             'split': 'train',
+    #             'url': 'http://localhost:22015/wikipedia_en_all_maxi_2022-05/A/User:The_other_Kiwix_guy/Landing'
+    #         }
+    #     ]
+    # }
 
     logger.info(f"Sending request to {url}")
     logger.info(f"Payload: {json.dumps(payload, indent=2)}")

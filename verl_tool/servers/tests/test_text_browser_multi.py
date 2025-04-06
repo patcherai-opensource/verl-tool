@@ -79,9 +79,10 @@ def test_connection(url="http://localhost:5000/get_observation"):
         return True
 
     actions = [
-        # "<think>balabalabalabala</think>\n```click [99]```",
-        # "<think>balabala</think>```type [1407] [death row inmates in the US] [1]```",
-        "<think>balabala</think>```stop [Here is a stop message]```",
+        "<think>balabalabalabala</think>\n```click [99]```",
+        "<think>balabala</think>```type [1407] [death row inmates in the US] [1]```",
+        "<think>balabala</think>```scroll [down]```",
+        # "<think>balabala</think>```stop [Here is a stop message]```",
     ]
 
     trajectory_ids = []
