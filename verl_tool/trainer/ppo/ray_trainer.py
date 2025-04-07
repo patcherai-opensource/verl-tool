@@ -25,6 +25,9 @@ def apply_kl_penalty(data: DataProto, kl_ctrl: core_algos.AdaptiveKLController, 
         beta = 0
         kld = torch.zeros_like(response_mask, dtype=torch.float32)
 
+    print("beta", beta)
+    print("kld", kld)
+    print("token_level_scores", token_level_scores)
     token_level_rewards = token_level_scores - beta * kld
 
     current_kl = masked_mean(kld, mask=response_mask, axis=-1)  # average over sequence
@@ -86,10 +89,17 @@ class AgentRayPPOTrainer(RayPPOTrainer):
                         non_tensor_batch_keys=['raw_prompt_ids', 'multi_modal_data', 'multi_modal_inputs'],
                     )
                 else:
+                    # print("#" * 100)
+                    # print(batch)
+                    # print("#" * 100)
                     gen_batch = batch.pop(
                         batch_keys=['input_ids', 'attention_mask', 'position_ids'],
-                        non_tensor_batch_keys=['raw_prompt_ids'],
+                        non_tensor_batch_keys=['raw_prompt_ids', 'extra_fields'],
                     )
+                    # print("#" * 100)
+                    # print(gen_batch)
+                    # print("#" * 100)
+                    # exit(1)
 
                 is_last_step = self.global_steps >= self.total_training_steps
 

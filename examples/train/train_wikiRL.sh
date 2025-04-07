@@ -3,21 +3,21 @@ dataset_name=wikiQA
 train_data=data/$dataset_name/train.parquet
 val_data=data/$dataset_name/test.parquet
 # model_name=Qwen/Qwen2.5-3B
-# model_name=/home/zhiheng/cogito/base_models/qwen2.5-0.5b-wiki
+model_name=/home/zhiheng/cogito/base_models/qwen2.5-0.5b-wiki
 # model_name=/home/zhiheng/verl/experiments/wiki/qwen2.5-1.5b
-model_name=Qwen/Qwen2.5-3B-Instruct
+# model_name=Qwen/Qwen2.5-3B-Instruct
 rl_alg=grpo # gae(ppo) or grpo, if grpo, then better set n>1 otherwise the group norm can not be effective
 n_gpus_per_node=2
 n_nodes=1
 n=2
 batch_size=2
 ppo_mini_batch_size=2
-max_prompt_length=4096
+max_prompt_length=2048
 max_response_length=4096
 max_obs_length=4096
 temperature=0.9
 strategy="fsdp_agent" # remove _agent for normal verl behavior
-valid_actions="[browser]" # "[answer,python]" are two valid actions, they are used to determine the stop
+valid_actions="[]" # "[answer,python]" are two valid actions, they are used to determine the stop
 token of
 # each action, which are </answer> and </python> respectively
 
@@ -28,7 +28,7 @@ export VLLM_ATTENTION_BACKEND=XFORMERS
 
 host=0.0.0.0
 # port=$(shuf -i 30000-31000 -n 1)
-port=30814
+port=30815
 tool_server_url=http://$host:$port/get_observation
 # python -m verl_tool.servers.serve --host $host --port $port --tool_type "python_code" &
 server_pid=$!
@@ -38,6 +38,7 @@ echo "Server (pid=$server_pid) started at $tool_server_url"
 # actor_rollout_ref.rollout.free_cache_engine=False \
 
 # export VLLM_USE_V1=1
+# actor_rollout_ref.agent.max_turns is for debug only
 PYTHONUNBUFFERED=1 python3 -m verl_tool.trainer.main_ppo \
     algorithm.adv_estimator=$rl_alg \
     data.train_files=$train_data \
@@ -56,9 +57,11 @@ PYTHONUNBUFFERED=1 python3 -m verl_tool.trainer.main_ppo \
     +actor_rollout_ref.agent.max_response_length=$max_response_length \
     +actor_rollout_ref.agent.max_start_length=$max_prompt_length \
     +actor_rollout_ref.agent.max_obs_length=$max_obs_length \
-    +actor_rollout_ref.agent.max_turns=10 \
+    +actor_rollout_ref.agent.truncate_obs_side=right \
+    +actor_rollout_ref.agent.max_turns=4 \
     +actor_rollout_ref.agent.num_gpus=$n_gpus_per_node \
     +actor_rollout_ref.agent.valid_actions=$valid_actions \
+    +actor_rollout_ref.agent.no_action_as_stop=False \
     actor_rollout_ref.rollout.log_prob_micro_batch_size_per_gpu=8 \
     actor_rollout_ref.rollout.tensor_model_parallel_size=1 \
     actor_rollout_ref.rollout.gpu_memory_utilization=0.4 \

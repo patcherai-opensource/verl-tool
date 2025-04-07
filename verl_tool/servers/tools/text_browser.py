@@ -9,7 +9,7 @@ from mini_webarena.env_worker import WikiQAEnv
 @ray.remote
 class WikiEnvActor:
     def __init__(self, question: str, gt: str, url: str = None):
-        self.env = WikiQAEnv(question, gt, url=url, prompt_format="full")
+        self.env = WikiQAEnv(question, gt, url=url, prompt_format="last")
 
     def start_env(self) -> str:
         obs = self.env.render()
@@ -103,6 +103,7 @@ class TextBrowserTool(BaseTool):
                 dones[i] = bool(done)
 
                 if dones[i]:
+                    observations[i] = "" # Clear observation if done
                     self.delete_env(trajectory_id)
 
             except Exception as e:
@@ -118,6 +119,6 @@ class TextBrowserTool(BaseTool):
     # -------------------------------------------------------------------------
     def _cleanup_actors_if_needed(self):
         """Remove oldest actors if count exceeds limit."""
-        while len(self.env_actors) > 50:
+        while len(self.env_actors) > 16:
             oldest = self.actor_creation_order.pop(0)
             self.delete_env(oldest)

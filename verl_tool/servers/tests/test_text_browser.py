@@ -21,7 +21,7 @@ def _send_request(url, trajectory_id, action):
                 trajectory_id + 'd18aeeee-96d2-45a4-b7a4-2c3feedffae4'
             ],
         "actions": [action, action],
-        'finish': [False, False],
+        'finish': [True, True],
         'extra_fields': [
             {
                 'golden_answers': ['Natalia Gastiain Tena'],

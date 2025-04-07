@@ -13,111 +13,8 @@ from pathlib import Path
 from concurrent.futures import ProcessPoolExecutor
 from functools import partial
 
-from nltk.tokenize import word_tokenize
-from difflib import SequenceMatcher
-
-
-def clean_text(text: str) -> str:
-    text = text.strip().lower()
-    if (text.startswith("'") and text.endswith("'")) or (text.startswith('"') and text.endswith('"')):
-        text = text[1:-1]
-    return text
-
-def char_lcs_ratio(ref: str, pred: str) -> float:
-    matcher = SequenceMatcher(None, ref, pred)
-    lcs_len = sum(block.size for block in matcher.get_matching_blocks())
-    max_len = max(len(ref), len(pred)) or 1
-    return lcs_len / max_len
-
-def token_f1(ref: str, pred: str) -> float:
-    ref_tokens = set(word_tokenize(ref))
-    pred_tokens = set(word_tokenize(pred))
-
-    if not ref_tokens or not pred_tokens:
-        return 0.0
-
-    intersection = ref_tokens & pred_tokens
-    precision = len(intersection) / len(pred_tokens)
-    recall = len(intersection) / len(ref_tokens)
-
-    if precision == 0 and recall == 0:
-        return 0.0
-
-    return 2 * (precision * recall) / (precision + recall)
-
-def edit_distance_ratio(ref: str, pred: str) -> float:
-    dp = [[0] * (len(pred) + 1) for _ in range(len(ref) + 1)]
-    for i in range(len(ref) + 1):
-        dp[i][0] = i
-    for j in range(len(pred) + 1):
-        dp[0][j] = j
-
-    for i in range(1, len(ref) + 1):
-        for j in range(1, len(pred) + 1):
-            cost = 0 if ref[i - 1] == pred[j - 1] else 1
-            dp[i][j] = min(
-                dp[i - 1][j] + 1,
-                dp[i][j - 1] + 1,
-                dp[i - 1][j - 1] + cost
-            )
-
-    edit_dist = dp[len(ref)][len(pred)]
-    max_len = max(len(ref), len(pred)) or 1
-    return edit_dist / max_len
-
-def fuzzy_match(ref: str, pred: str,
-                alpha: float = 0.7,
-                beta: float = 0.3,
-                gamma: float = 0.1) -> float:
-    print("Now is in fuzzy_match")
-    print(f"ref: {ref}, pred: {pred}")
-
-    ref = clean_text(ref)
-    pred = clean_text(pred)
-
-    char_lcs = char_lcs_ratio(ref, pred)
-    tok_f1 = token_f1(ref, pred)
-    dist_penalty = edit_distance_ratio(ref, pred)
-
-    score = alpha * char_lcs + beta * tok_f1 - gamma * dist_penalty
-    print("score: ", score)
-    return max(0.0, min(score, 1.0))
-
-def format_score(s: str, is_success: bool = True) -> float:
-    score = 0.0
-
-    if "<think>" not in s or "</think>" not in s:
-        return 0.0
-    score += 0.3
-
-    idx_think = s.index("<think>")
-    prefix = s[:idx_think].strip()
-    if prefix == "":
-        score += 0.1
-
-    tail_part = s.split("</think>", maxsplit=1)
-    if len(tail_part) < 2:
-        if is_success:
-            score += 0.2
-        return round(score, 3)
-
-    tail_content = tail_part[1].strip()
-
-    pattern = r"```((.|\n)*?)```"
-    match = re.search(pattern, tail_content)
-    if match:
-        score += 0.2
-        action_text = match.group(1).strip()
-
-        expected_block = f"```{action_text}```"
-        if tail_content == expected_block:
-            score += 0.2
-
-    if is_success:
-        score += 0.2
-
-    return round(score, 3)
-
+from mini_webarena.rl_utils import format_score
+from mini_webarena.evaluator import metric_heuristic
 # ------------------------------------------------------------------------------
 # WikiQA Reward Manager
 # ------------------------------------------------------------------------------
@@ -129,7 +26,7 @@ class WikiQARewardManager:
     the ground truth answers. The final reward is a weighted combination of a fuzzy matching
     score and a structure score.
     # """
-    def __init__(self, tokenizer, num_examine, compute_score=None) -> None:
+    def __init__(self, tokenizer=None, num_examine=1, compute_score=None) -> None:
         """
         Initialize the WikiQARewardManager.
 
@@ -137,39 +34,32 @@ class WikiQARewardManager:
         - fuzzy_weight: The weight applied to the fuzzy matching score.
         - structure_weight: The weight applied to the structure score.
         """
+        if tokenizer is None:
+            # Simply use QWen2.5-7B tokenizer
+            from transformers import AutoTokenizer
+            tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen2.5-7B-Instruct")
         self.tokenizer = tokenizer
         self.num_examine = num_examine  # the number of batches of decoded responses to print to the console
         self.compute_score = compute_score or _default_compute_score
-        print("==== Init WikiQARewardManager ====")
-        print("self.tokenizer", self.tokenizer)
-        print("self.num_examine", self.num_examine)
-        print("self.compute_score", self.compute_score)
         self.fuzzy_weight = 0.7
         self.structure_weight = 0.3
-    def compute_reward(self, pred: str, ground_truths: list) -> float:
-        """
-        Compute the reward for a single prediction.
 
-        This method calculates the fuzzy match scores for all provided ground truth answers,
-        selects the maximum fuzzy score, computes the structure score for the predicted answer,
-        and then combines them using the defined weights.
+    def answer_score(self, pred, ground_truths):
+        def extract_last_stop_content(input_str: str) -> str:
+            matches = re.findall(r"```stop\s*\[([^\]]*)\]```", input_str)
+            if matches:
+                return matches[-1]
+            return ""
+        # First match ```stop [...]``` use regex to find the last ```stop [...]``` in the string
+        pred = extract_last_stop_content(pred)
+        score = metric_heuristic(ground_truths, pred)
+        # print("answer score", ground_truths, pred, score)
+        return score
 
-        Parameters:
-        - pred: The predicted answer string.
-        - ground_truths: A list of ground truth answer strings.
-
-        Returns:
-        - A float representing the final computed reward.
-        """
-        # Calculate fuzzy match scores for each ground truth answer.
-        fuzzy_scores = [fuzzy_match(gt, pred) for gt in ground_truths]
-        # Select the best (maximum) fuzzy score.
-        max_fuzzy = max(fuzzy_scores) if fuzzy_scores else 0.0
-        # Calculate the structure score for the predicted answer.
-        struct_score = format_score(pred)
-        # Combine the two scores using the defined weights.
-        final_score = self.fuzzy_weight * max_fuzzy + self.structure_weight * struct_score
-        return final_score
+    def format_score(self, actions):
+        # Average of format_score
+        scores = [format_score(action) for action in actions]
+        return sum(scores) / len(scores) if scores else 0
 
     def __call__(self, data:DataProto):
         """
@@ -188,64 +78,139 @@ class WikiQARewardManager:
         """
         # Retrieve the list of predicted responses.
         print("==== Call WikiQARewardManager ====")
-        print(data)
-        exit(1)
-        predictions = data.batch['responses']
-        rewards = []
-        # Iterate over each sample in the batch.
+        # print(data)
+        # import pickle
+        # with open("data_stub.pkl", "wb") as f:
+        #     pickle.dump(data, f)
+        special_token_ids = set(self.tokenizer.all_special_ids)
+
+        actions_list = []
+        observations_list = []
+        response_list = []
         for i in range(len(data)):
-            # Get the predicted answer for the current sample.
-            pred = predictions[i]
-            # Get the list of ground truth answers for the current sample.
-            ground_truths = data[i].non_tensor_batch['reward_model']['ground_truth']
-            # Compute the combined reward for this sample.
-            reward = self.compute_reward(pred, ground_truths)
-            rewards.append(reward)
-        # Convert the list of rewards into a PyTorch tensor.
-        reward_tensor = torch.tensor(rewards, dtype=torch.float32)
-        print(f"Computed rewards for {len(rewards)} samples.")
+            actions = []
+            observations = []
+            input_ids = data.batch["input_ids"][i].tolist()
+            attention_mask = data.batch["attention_mask"][i].tolist()
+
+            action_lengths_list = data.non_tensor_batch["action_lengths"][i]
+            obs_lengths_list = data.non_tensor_batch["obs_lengths"][i]
+
+            # 获取 response 部分的 token ids
+            response_ids = input_ids[2048:] # Depends on Prompt Length, TODO
+            response_mask = attention_mask[2048:]
+            response_tokens = [
+                tid for tid, mask in zip(response_ids, response_mask)
+                if mask == 1 and tid not in special_token_ids
+            ]
+            response_text = self.tokenizer.decode(response_tokens, skip_special_tokens=True).strip()
+            response_list.append(response_text)
+
+            # print(f"Sample {i}:")
+            # print(f"  Prompt tokens (no special):   {len(input_ids[:2048])}")
+            # print(f"  Response tokens (no special): {len(response_tokens)}")
+            # print(f"  Total tokens (no special):    {len(input_ids[:2048]) + len(response_tokens)}")
+
+            # 切分并解码 response_tokens
+            cursor = 0
+            for idx, (action_len, obs_len) in enumerate(zip(action_lengths_list, obs_lengths_list)):
+                action_tokens = response_tokens[cursor:cursor + action_len - 1 ]
+                cursor += action_len - 1
+                obs_tokens = response_tokens[cursor:cursor + obs_len - 1]
+                cursor += obs_len - 1
+
+                action_text = self.tokenizer.decode(action_tokens, skip_special_tokens=True).strip()
+                actions.append(action_text)
+                obs_text = self.tokenizer.decode(obs_tokens, skip_special_tokens=True).strip()
+                observations.append(obs_text)
+                # print(f"[Action {idx + 1}]\n{action_text}")
+                # print(f"[Obs {idx + 1}]\n{obs_text}")
+                # print("&&&&&")
+
+            if cursor < len(response_tokens):
+                remaining_tokens = response_tokens[cursor:]
+                remaining_text = self.tokenizer.decode(remaining_tokens, skip_special_tokens=True).strip()
+                actions.append(remaining_text)
+                # print("[Remaining tokens after cuts]")
+                # print(remaining_text)
+                # print()
+            actions_list.append(actions)
+            observations_list.append(observations)
+
+        # TODO: Add save to disk function,
+        # actions.jsonl: {traj_id, actions},
+        # traj.jsonl: {traj_id, actions, observations}
+
+        prompt_ids = data.batch['prompts']
+        prompt_length = prompt_ids.shape[-1]  # prompt 的长度
+        response_ids = data.batch['responses']
+        valid_response_length = data.batch['attention_mask'][:, prompt_length:].sum(dim=-1)  # shape: [batch_size]
+        reward_tensor = torch.zeros_like(response_ids, dtype=torch.float32)
+
+        answer_scores = []
+        format_scores = []
+
+        for i in range(len(data)):
+            ground_truths = data.non_tensor_batch["reward_model"][i]["ground_truth"]
+            # 假设 response_list[i] 是当前生成的文本序列 (str)，actions_list[i] 是解码后的 token list / action list
+            pred = response_list[i]
+            answer_reward = self.answer_score(pred, ground_truths)
+            format_reward = self.format_score(actions_list[i])
+
+            # 最终的 scalar reward，比如 answer_reward + 0.5 * format_reward
+            final_reward = answer_reward + 0.5 * format_reward
+
+            # 只在该样本最后一个有效 token 的位置赋值
+            # valid_response_length[i] - 1 因为下标从 0 开始
+            reward_tensor[i, valid_response_length[i].item() - 1] = final_reward
+
+            # 存一下分数用于查看
+            answer_scores.append(answer_reward)
+            format_scores.append(format_reward)
+
+        print(f"Computed rewards for {len(data)} samples.")
+        print("Answer scores:", answer_scores)
+        print("Format scores:", format_scores)
+
+        # reward_tensor = reward_tensor.mean(dim=-1)
         return reward_tensor
 
-# ------------------------------------------------------------------------------
-# Dummy Data Example for Testing
-# ------------------------------------------------------------------------------
 if __name__ == '__main__':
-    # Define a dummy data sample class to mimic the expected data structure.
-    class DummyDataSample:
-        def __init__(self, response, ground_truth):
-            # non_tensor_batch holds metadata and ground truth information.
-            self.non_tensor_batch = {'reward_model': {'ground_truth': ground_truth}}
-            self.response = response
+    import pickle
 
-    # Define a dummy data batch class that holds multiple dummy samples.
-    class DummyDataBatch:
-        def __init__(self, responses, ground_truths):
-            # 'batch' simulates a tensor batch containing the predicted responses.
-            self.batch = {'responses': responses}
-            # Create a list of DummyDataSample objects for each response and corresponding ground truth.
-            self.data_samples = [DummyDataSample(resp, gt) for resp, gt in zip(responses, ground_truths)]
+    # Load the saved data object from disk
+    with open("data_stub.pkl", "rb") as f:
+        dummy_data = pickle.load(f)
 
-        def __len__(self):
-            return len(self.data_samples)
-
-        def __getitem__(self, index):
-            return self.data_samples[index]
-
-    # Create dummy responses and corresponding ground truths for testing.
-    dummy_responses = [
-        "The capital of France is Paris.",
-        "Water boils at 100 degrees Celsius"
-    ]
-    dummy_ground_truths = [
-        ["Paris is the capital of France", "Paris"],
-        ["100°C is the boiling point of water", "Water boils at 100°C."]
-    ]
-    dummy_data = DummyDataBatch(dummy_responses, dummy_ground_truths)
-
-    # Instantiate the WikiQARewardManager with default weights.
+    # Instantiate the WikiQARewardManager (you can pass in config if needed)
     reward_manager = WikiQARewardManager()
-    # Compute rewards for the dummy data batch.
+
+    # Compute rewards for the loaded data
     rewards = reward_manager(dummy_data)
     print("Rewards:", rewards)
 
 
+"""
+(TaskRunner pid=2019847) ==== Call WikiQARewardManager ====
+(TaskRunner pid=2019847) DataProto(batch=TensorDict(
+(TaskRunner pid=2019847)     fields={
+(TaskRunner pid=2019847)         attention_mask: Tensor(shape=torch.Size([4, 8192]), device=cpu, dtype=torch.int64, is_shared=False),
+(TaskRunner pid=2019847)         info_mask: Tensor(shape=torch.Size([4, 8192]), device=cpu, dtype=torch.int64, is_shared=False),
+(TaskRunner pid=2019847)         input_ids: Tensor(shape=torch.Size([4, 8192]), device=cpu, dtype=torch.int64, is_shared=False),
+(TaskRunner pid=2019847)         old_log_probs: Tensor(shape=torch.Size([4, 4096]), device=cpu, dtype=torch.float32, is_shared=False),
+(TaskRunner pid=2019847)         position_ids: Tensor(shape=torch.Size([4, 8192]), device=cpu, dtype=torch.int64, is_shared=False),
+(TaskRunner pid=2019847)         prompts: Tensor(shape=torch.Size([4, 4096]), device=cpu, dtype=torch.int64, is_shared=False),
+(TaskRunner pid=2019847)         ref_log_prob: Tensor(shape=torch.Size([4, 4096]), device=cpu, dtype=torch.float32, is_shared=False),
+(TaskRunner pid=2019847)         responses: Tensor(shape=torch.Size([4, 4096]), device=cpu, dtype=torch.int64, is_shared=False),
+(TaskRunner pid=2019847)         responses_with_info_mask: Tensor(shape=torch.Size([4, 4096]), device=cpu, dtype=torch.int64, is_shared=False)},
+(TaskRunner pid=2019847)     batch_size=torch.Size([4]),
+(TaskRunner pid=2019847)     device=None,
+(TaskRunner pid=2019847)     is_shared=False), non_tensor_batch={'data_source': array(['wiki_qa', 'wiki_qa', 'wiki_qa', 'wiki_qa'], dtype=object), 'ability': array(['wiki', 'wiki', 'wiki', 'wiki'], dtype=object), 'reward_model': array([{'ground_truth': array(['Ginnifer Goodwin'], dtype=object), 'style': 'rule'},
+(TaskRunner pid=2019847)        {'ground_truth': array(['Ginnifer Goodwin'], dtype=object), 'style': 'rule'},
+(TaskRunner pid=2019847)        {'ground_truth': array(['Natalia Gastiain Tena'], dtype=object), 'style': 'rule'},
+(TaskRunner pid=2019847)        {'ground_truth': array(['Natalia Gastiain Tena'], dtype=object), 'style': 'rule'}],
+(TaskRunner pid=2019847)       dtype=object), 'index': array([0, 0, 0, 0], dtype=object), 'uid': array(['ca6a0e8e-6821-4a00-8a0c-5049019e7da7',
+(TaskRunner pid=2019847)        'ca6a0e8e-6821-4a00-8a0c-5049019e7da7',
+(TaskRunner pid=2019847)        'b58d9f7c-48c6-487f-911f-10db4a2f7b2b',
+(TaskRunner pid=2019847)        'b58d9f7c-48c6-487f-911f-10db4a2f7b2b'], dtype=object)}, meta_info={'turns_stats': [4, 4], 'active_mask': [True, True], 'valid_action_stats': [4, 4], 'global_token_num': [5541, 5541, 3697, 5542], 'temperature': 0.9})
+"""
