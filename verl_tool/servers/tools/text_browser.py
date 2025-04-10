@@ -16,10 +16,10 @@ class WikiEnvActor:
         return obs
 
     def step_env(self, query: str) -> (str, int):
-        obs, reward, done, info = self.env.step(query)
+        obs, done, valid = self.env.step(query)
         if done:
             self.env.close()
-        return obs, 1 if done else 0
+        return obs, done, valid
 
 
 @register_tool
@@ -31,7 +31,7 @@ class TextBrowserTool(BaseTool):
     """
     tool_type = "text_browser"
 
-    def __init__(self, num_workers=1):
+    def __init__(self, num_workers=32):
         super().__init__(num_workers)
         # Maps trajectory_id to Ray Actor
         self.env_actors = {}
@@ -94,13 +94,19 @@ class TextBrowserTool(BaseTool):
             try:
                 result = ray.get(fut)
                 if isinstance(result, tuple):
-                    obs, done = result
+                    obs, done, valid = result
                 else:
                     obs = result
                     done = False
+                    valid = False
 
                 observations[i] = obs
-                dones[i] = bool(done)
+                dones[i] = done
+                valid_flags[i] = valid
+
+                if trajectory_id in self.actor_creation_order:
+                    self.actor_creation_order.remove(trajectory_id)
+                self.actor_creation_order.append(trajectory_id)
 
                 if dones[i]:
                     observations[i] = "" # Clear observation if done
@@ -119,6 +125,6 @@ class TextBrowserTool(BaseTool):
     # -------------------------------------------------------------------------
     def _cleanup_actors_if_needed(self):
         """Remove oldest actors if count exceeds limit."""
-        while len(self.env_actors) > 16:
+        while len(self.env_actors) > 64:
             oldest = self.actor_creation_order.pop(0)
             self.delete_env(oldest)
