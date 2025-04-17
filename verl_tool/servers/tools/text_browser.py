@@ -74,6 +74,9 @@ class TextBrowserTool(BaseTool):
                 actor = WikiEnvActor.remote(question, gt, url)
                 self.env_actors[trajectory_id] = actor
                 self.actor_creation_order.append(trajectory_id)
+                # print("%"*100)
+                # print(actor.start_env.remote())
+                # print("%"*100)
 
             actor = self.env_actors[trajectory_id]
 
@@ -125,6 +128,6 @@ class TextBrowserTool(BaseTool):
     # -------------------------------------------------------------------------
     def _cleanup_actors_if_needed(self):
         """Remove oldest actors if count exceeds limit."""
-        while len(self.env_actors) > 64:
+        while len(self.env_actors) > 128:
             oldest = self.actor_creation_order.pop(0)
             self.delete_env(oldest)

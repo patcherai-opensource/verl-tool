@@ -77,11 +77,12 @@ class WikiQARewardManager:
         - reward_tensor: A torch.Tensor containing the computed rewards for each sample.
         """
         # Retrieve the list of predicted responses.
-        print("==== Call WikiQARewardManager ====")
+        # print("")
         # print(data)
         # import pickle
         # with open("data_stub.pkl", "wb") as f:
         #     pickle.dump(data, f)
+
         special_token_ids = set(self.tokenizer.all_special_ids)
 
         actions_list = []
@@ -172,6 +173,7 @@ class WikiQARewardManager:
         print("Answer scores:", answer_scores)
         print("Format scores:", format_scores)
 
+        # exit(1)
         # reward_tensor = reward_tensor.mean(dim=-1)
         return reward_tensor
 

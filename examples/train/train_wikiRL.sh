@@ -3,23 +3,31 @@ dataset_name=wikiQA
 train_data=data/$dataset_name/train.parquet
 val_data=data/$dataset_name/test.parquet
 # model_name=Qwen/Qwen2.5-3B
-model_name=/home/zhiheng/cogito/base_models/qwen2.5-0.5b-wiki
-# model_name=/home/zhiheng/verl/experiments/wiki/qwen2.5-1.5b
+# model_name=/home/zhiheng/cogito/base_models/qwen2.5-0.5b-wiki
+model_name=/home/zhiheng/verl/experiments/wiki/qwen2.5-1.5b-direct_plain-hard
 # model_name=Qwen/Qwen2.5-3B-Instruct
 rl_alg=grpo # gae(ppo) or grpo, if grpo, then better set n>1 otherwise the group norm can not be effective
-n_gpus_per_node=2
+n_gpus_per_node=4
 n_nodes=1
-n=2
-batch_size=2
-ppo_mini_batch_size=2
-max_prompt_length=2048
-max_response_length=4096
-max_obs_length=4096
-temperature=0.9
+n=4
+batch_size=16
+ppo_mini_batch_size=4
+max_prompt_length=3072
+max_response_length=3072
+max_obs_length=2048
+temperature=0.7
 strategy="fsdp_agent" # remove _agent for normal verl behavior
 valid_actions="[]" # "[answer,python]" are two valid actions, they are used to determine the stop
 token of
 # each action, which are </answer> and </python> respectively
+
+# === begin, added by Zhiheng ===
+max_action_length=512
+rolling_with_prompt=False
+action_before_observation=True
+truncate_obs_side=left # This is weird but required in the current code
+truncate_response_side=right
+# === end, added by Zhiheng ===
 
 model_pretty_name=$(echo $model_name | tr '/' '_' | tr '[:upper:]' '[:lower:]')
 run_name="${model_pretty_name}-${rl_alg}-n${n}-b${batch_size}-t${temperature}"
@@ -57,8 +65,12 @@ PYTHONUNBUFFERED=1 python3 -m verl_tool.trainer.main_ppo \
     +actor_rollout_ref.agent.max_response_length=$max_response_length \
     +actor_rollout_ref.agent.max_start_length=$max_prompt_length \
     +actor_rollout_ref.agent.max_obs_length=$max_obs_length \
-    +actor_rollout_ref.agent.truncate_obs_side=right \
-    +actor_rollout_ref.agent.max_turns=4 \
+    +actor_rollout_ref.agent.max_action_length=$max_action_length \
+    +actor_rollout_ref.agent.rolling_with_prompt=$rolling_with_prompt \
+    +actor_rollout_ref.agent.action_before_observation=$action_before_observation \
+    +actor_rollout_ref.agent.truncate_response_side=$truncate_response_side \
+    +actor_rollout_ref.agent.truncate_obs_side=$truncate_obs_side \
+    +actor_rollout_ref.agent.max_turns=5 \
     +actor_rollout_ref.agent.num_gpus=$n_gpus_per_node \
     +actor_rollout_ref.agent.valid_actions=$valid_actions \
     +actor_rollout_ref.agent.no_action_as_stop=False \
@@ -70,7 +82,7 @@ PYTHONUNBUFFERED=1 python3 -m verl_tool.trainer.main_ppo \
     actor_rollout_ref.rollout.n=$n \
     actor_rollout_ref.rollout.top_p=1.0 \
     actor_rollout_ref.ref.log_prob_micro_batch_size_per_gpu=8 \
-    critic.optim.lr=1e-5 \
+    critic.optim.lr=5e-7 \
     critic.strategy=$strategy \
     critic.model.path=$model_name \
     critic.ppo_micro_batch_size_per_gpu=8 \
@@ -89,3 +101,5 @@ PYTHONUNBUFFERED=1 python3 -m verl_tool.trainer.main_ppo \
 
 #pkill -P -9 $server_pid
 #kill -9 $kill $server_pid
+
+# loss from 1e-5 to 5e-7;
