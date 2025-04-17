@@ -61,12 +61,19 @@ class TextBrowserTool(BaseTool):
     # Core logic that uses Ray actors
     # -------------------------------------------------------------------------
     def get_observations(self, trajectory_ids, actions, extra_fields):
+        import json
+        from pathlib import Path
+
         futures = []
 
+        # ---------------------------------------------------------------------
+        # 1. Dispatch Ray RPCs -------------------------------------------------
+        # ---------------------------------------------------------------------
         for i, trajectory_id in enumerate(trajectory_ids):
             action = actions[i]
             extra = extra_fields[i].get("extra_fields", extra_fields[i])
 
+            # Lazily create an actor for every new trajectory
             if trajectory_id not in self.env_actors:
                 question = extra.get("question", "placeholder")
                 gt = extra.get("gt", "placeholder")
@@ -74,21 +81,18 @@ class TextBrowserTool(BaseTool):
                 actor = WikiEnvActor.remote(question, gt, url)
                 self.env_actors[trajectory_id] = actor
                 self.actor_creation_order.append(trajectory_id)
-                # print("%"*100)
-                # print(actor.start_env.remote())
-                # print("%"*100)
 
             actor = self.env_actors[trajectory_id]
 
-            if action is None:
-                fut = actor.start_env.remote()
-            else:
-                fut = actor.step_env.remote(action)
-
+            # Decide whether to render or step
+            fut = actor.start_env.remote() if action is None else actor.step_env.remote(action)
             futures.append((i, trajectory_id, fut))
 
             self._cleanup_actors_if_needed()
 
+        # ---------------------------------------------------------------------
+        # 2. Gather results ----------------------------------------------------
+        # ---------------------------------------------------------------------
         observations = [""] * len(trajectory_ids)
         dones = [False] * len(trajectory_ids)
         valid_flags = [True] * len(trajectory_ids)
@@ -96,23 +100,22 @@ class TextBrowserTool(BaseTool):
         for i, trajectory_id, fut in futures:
             try:
                 result = ray.get(fut)
-                if isinstance(result, tuple):
+                if isinstance(result, tuple):           # step_env
                     obs, done, valid = result
-                else:
-                    obs = result
-                    done = False
-                    valid = False
+                else:                                   # start_env
+                    obs, done, valid = result, False, False
 
                 observations[i] = obs
                 dones[i] = done
                 valid_flags[i] = valid
 
+                # refresh LRU list
                 if trajectory_id in self.actor_creation_order:
                     self.actor_creation_order.remove(trajectory_id)
                 self.actor_creation_order.append(trajectory_id)
 
-                if dones[i]:
-                    observations[i] = "" # Clear observation if done
+                if done:
+                    observations[i] = ""               # clear final obs
                     self.delete_env(trajectory_id)
 
             except Exception as e:
@@ -121,6 +124,38 @@ class TextBrowserTool(BaseTool):
                 dones[i] = False
                 valid_flags[i] = False
 
+        # ---------------------------------------------------------------------
+        # 3. Persist one‑line JSON log -----------------------------------------
+        # ---------------------------------------------------------------------
+        try:
+            log_path = Path("browser_server_logs.jsonl")
+            log_path.parent.mkdir(parents=True, exist_ok=True)
+            with log_path.open("a", encoding="utf-8") as f:
+                f.write(
+                    json.dumps(
+                        {
+                            "input": {
+                                "trajectory_ids": trajectory_ids,
+                                "actions": actions,
+                                "extra_fields": extra_fields,
+                            },
+                            "output": {
+                                "observations": observations,
+                                "dones": dones,
+                                "valid_flags": valid_flags,
+                            },
+                        },
+                        ensure_ascii=False,
+                    )
+                    + "\n"
+                )
+        except Exception as e:
+            # logging failure should never break main logic
+            print(f"[WARN] Failed to write browser_server_logs.jsonl: {e}")
+
+        # ---------------------------------------------------------------------
+        # 4. Return to caller --------------------------------------------------
+        # ---------------------------------------------------------------------
         return observations, dones, valid_flags
 
     # -------------------------------------------------------------------------

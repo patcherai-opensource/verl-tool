@@ -61,121 +61,133 @@ class WikiQARewardManager:
         scores = [format_score(action) for action in actions]
         return sum(scores) / len(scores) if scores else 0
 
-    def __call__(self, data:DataProto):
+    # def __call__(self, data:DataProto):
+    #     # Retrieve the list of predicted responses.
+    #     # print("")
+    #     # print(data)
+    #     # import pickle
+    #     # with open("data_stub.pkl", "wb") as f:
+    #     #     pickle.dump(data, f)
+    #     pass
+
+    def __call__(self, data: DataProto):
         """
-        Compute rewards for a batch of data samples.
+        Compute scalar rewards for a batch and append per‑sample logs to
+        ``reward_manager_history.jsonl``.
 
-        Expected input 'data' structure:
-          - data.batch['responses']: A list of predicted answer strings.
-          - For each sample i, data[i].non_tensor_batch['reward_model']['ground_truth'] should
-            provide the list of ground truth answer strings.
+        Each JSON line now stores token‑separated strings (not raw ID lists):
 
-        Parameters:
-        - data: A batch object containing multiple data samples.
-
-        Returns:
-        - reward_tensor: A torch.Tensor containing the computed rewards for each sample.
+        {
+            "uid": <trajectory_uid>,
+            "input_tokens": "▁This ▁is ▁a ...",      # whitespace‑joined tokens
+            "pred_tokens": "▁Answer ▁text ...",
+            "actions": [...],
+            "observations": [...],
+            "answer_score": <float>,
+            "format_score": <float>
+        }
         """
-        # Retrieve the list of predicted responses.
         # print("")
         # print(data)
         # import pickle
-        # with open("data_stub.pkl", "wb") as f:
+        # with open("data_stub_new.pkl", "wb") as f:
         #     pickle.dump(data, f)
+
+        import json
+        from pathlib import Path
 
         special_token_ids = set(self.tokenizer.all_special_ids)
 
-        actions_list = []
-        observations_list = []
-        response_list = []
+        actions_list, observations_list, response_list = [], [], []
+
+        # ---------- 1.  decode actions / obs / responses --------------------
         for i in range(len(data)):
-            actions = []
-            observations = []
             input_ids = data.batch["input_ids"][i].tolist()
             attention_mask = data.batch["attention_mask"][i].tolist()
+            action_lens = data.non_tensor_batch["action_lengths"][i]
+            obs_lens = data.non_tensor_batch["obs_lengths"][i]
 
-            action_lengths_list = data.non_tensor_batch["action_lengths"][i]
-            obs_lengths_list = data.non_tensor_batch["obs_lengths"][i]
-
-            # 获取 response 部分的 token ids
-            response_ids = input_ids[2048:] # Depends on Prompt Length, TODO
-            response_mask = attention_mask[2048:]
-            response_tokens = [
-                tid for tid, mask in zip(response_ids, response_mask)
-                if mask == 1 and tid not in special_token_ids
+            prompt_len = 2048
+            resp_ids   = input_ids[prompt_len:]
+            resp_mask  = attention_mask[prompt_len:]
+            resp_tokens = [
+                tid for tid, m in zip(resp_ids, resp_mask)
+                if m == 1 and tid not in special_token_ids
             ]
-            response_text = self.tokenizer.decode(response_tokens, skip_special_tokens=True).strip()
-            response_list.append(response_text)
+            resp_text = self.tokenizer.decode(resp_tokens,
+                                              skip_special_tokens=True).strip()
+            response_list.append(resp_text)
 
-            # print(f"Sample {i}:")
-            # print(f"  Prompt tokens (no special):   {len(input_ids[:2048])}")
-            # print(f"  Response tokens (no special): {len(response_tokens)}")
-            # print(f"  Total tokens (no special):    {len(input_ids[:2048]) + len(response_tokens)}")
+            cursor, actions, observations = 0, [], []
+            for a_len, o_len in zip(action_lens, obs_lens):
+                actions.append(self.tokenizer.decode(
+                    resp_tokens[cursor:cursor + a_len - 1],
+                    skip_special_tokens=True).strip())
+                cursor += a_len - 1
+                observations.append(self.tokenizer.decode(
+                    resp_tokens[cursor:cursor + o_len - 1],
+                    skip_special_tokens=True).strip())
+                cursor += o_len - 1
+            if cursor < len(resp_tokens):
+                actions.append(self.tokenizer.decode(
+                    resp_tokens[cursor:],
+                    skip_special_tokens=True).strip())
 
-            # 切分并解码 response_tokens
-            cursor = 0
-            for idx, (action_len, obs_len) in enumerate(zip(action_lengths_list, obs_lengths_list)):
-                action_tokens = response_tokens[cursor:cursor + action_len - 1 ]
-                cursor += action_len - 1
-                obs_tokens = response_tokens[cursor:cursor + obs_len - 1]
-                cursor += obs_len - 1
-
-                action_text = self.tokenizer.decode(action_tokens, skip_special_tokens=True).strip()
-                actions.append(action_text)
-                obs_text = self.tokenizer.decode(obs_tokens, skip_special_tokens=True).strip()
-                observations.append(obs_text)
-                # print(f"[Action {idx + 1}]\n{action_text}")
-                # print(f"[Obs {idx + 1}]\n{obs_text}")
-                # print("&&&&&")
-
-            if cursor < len(response_tokens):
-                remaining_tokens = response_tokens[cursor:]
-                remaining_text = self.tokenizer.decode(remaining_tokens, skip_special_tokens=True).strip()
-                actions.append(remaining_text)
-                # print("[Remaining tokens after cuts]")
-                # print(remaining_text)
-                # print()
             actions_list.append(actions)
             observations_list.append(observations)
 
-        # TODO: Add save to disk function,
-        # actions.jsonl: {traj_id, actions},
-        # traj.jsonl: {traj_id, actions, observations}
+        # ---------- 2.  reward tensor --------------------------------------
+        prompt_ids   = data.batch["prompts"]
+        prompt_len   = prompt_ids.shape[-1]
+        responses_id = data.batch["responses"]
+        valid_resp_len = data.batch["attention_mask"][:, prompt_len:].sum(dim=-1)
+        reward_tensor = torch.zeros_like(responses_id, dtype=torch.float32)
 
-        prompt_ids = data.batch['prompts']
-        prompt_length = prompt_ids.shape[-1]  # prompt 的长度
-        response_ids = data.batch['responses']
-        valid_response_length = data.batch['attention_mask'][:, prompt_length:].sum(dim=-1)  # shape: [batch_size]
-        reward_tensor = torch.zeros_like(response_ids, dtype=torch.float32)
-
-        answer_scores = []
-        format_scores = []
+        answer_scores, format_scores = [], []
 
         for i in range(len(data)):
-            ground_truths = data.non_tensor_batch["reward_model"][i]["ground_truth"]
-            # 假设 response_list[i] 是当前生成的文本序列 (str)，actions_list[i] 是解码后的 token list / action list
+            gts = data.non_tensor_batch["reward_model"][i]["ground_truth"]
             pred = response_list[i]
-            answer_reward = self.answer_score(pred, ground_truths)
-            format_reward = self.format_score(actions_list[i])
+            answer_reward  = self.answer_score(pred, gts)
+            format_reward  = self.format_score(actions_list[i])
+            final_reward   = answer_reward + 0.5 * format_reward
 
-            # 最终的 scalar reward，比如 answer_reward + 0.5 * format_reward
-            final_reward = answer_reward + 0.5 * format_reward
-
-            # 只在该样本最后一个有效 token 的位置赋值
-            # valid_response_length[i] - 1 因为下标从 0 开始
-            reward_tensor[i, valid_response_length[i].item() - 1] = final_reward
-
-            # 存一下分数用于查看
+            reward_tensor[i, valid_resp_len[i].item() - 1] = final_reward
             answer_scores.append(answer_reward)
             format_scores.append(format_reward)
+
+        # ---------- 3.  persistent logging ---------------------------------
+        try:
+            log_file = Path("reward_manager_history.jsonl")
+            log_file.parent.mkdir(parents=True, exist_ok=True)
+            with log_file.open("a", encoding="utf-8") as f:
+                for idx in range(len(data)):
+                    # convert entire sequence and prediction to whitespace‑joined tokens
+                    input_text = self.tokenizer.decode(
+                        data.batch["input_ids"][idx].tolist(),
+                        skip_special_tokens=True).strip()
+                    input_tokens = " ".join(self.tokenizer.tokenize(input_text))
+                    pred_tokens  = " ".join(self.tokenizer.tokenize(response_list[idx]))
+
+                    log_entry = {
+                        "uid": data.non_tensor_batch.get("uid", [None]*len(data))[idx],
+                        "input_tokens": input_tokens,
+                        "pred_tokens":  pred_tokens,
+                        "actions": actions_list[idx],
+                        "observations": observations_list[idx],
+                        "answer_score": answer_scores[idx],
+                        "format_score": format_scores[idx],
+                    }
+                    f.write(json.dumps(log_entry, ensure_ascii=False) + "\n")
+        except Exception as e:
+            print(f"[WARN] could not append to reward_manager_history.jsonl: {e}")
 
         print(f"Computed rewards for {len(data)} samples.")
         print("Answer scores:", answer_scores)
         print("Format scores:", format_scores)
 
-        # exit(1)
-        # reward_tensor = reward_tensor.mean(dim=-1)
         return reward_tensor
+
 
 if __name__ == '__main__':
     import pickle
