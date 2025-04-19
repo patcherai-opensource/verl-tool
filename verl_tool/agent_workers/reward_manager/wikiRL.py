@@ -18,6 +18,12 @@ from mini_webarena.evaluator import metric_heuristic
 # ------------------------------------------------------------------------------
 # WikiQA Reward Manager
 # ------------------------------------------------------------------------------
+
+def clean_text(text):
+    # 删除控制字符 & 非打印字符
+    return re.sub(r'[\x00-\x1F\x7F-\x9F\u200b-\u200f\u2028-\u202f\u2060-\u206f]', '', text)
+
+
 class WikiQARewardManager:
     """
     Reward Manager for the wikiQA dataset.
@@ -87,11 +93,11 @@ class WikiQARewardManager:
             "format_score": <float>
         }
         """
-        # print("")
-        # print(data)
-        # import pickle
-        # with open("data_stub_new.pkl", "wb") as f:
-        #     pickle.dump(data, f)
+        print("")
+        print(data)
+        import pickle
+        with open("data_stub_new.pkl", "wb") as f:
+            pickle.dump(data, f)
 
         import json
         from pathlib import Path
@@ -163,11 +169,12 @@ class WikiQARewardManager:
             with log_file.open("a", encoding="utf-8") as f:
                 for idx in range(len(data)):
                     # convert entire sequence and prediction to whitespace‑joined tokens
-                    input_text = self.tokenizer.decode(
+                    input_text = clean_text(self.tokenizer.decode(
                         data.batch["input_ids"][idx].tolist(),
-                        skip_special_tokens=True).strip()
+                        skip_special_tokens=True
+                    ).strip())
                     input_tokens = " ".join(self.tokenizer.tokenize(input_text))
-                    pred_tokens  = " ".join(self.tokenizer.tokenize(response_list[idx]))
+                    pred_tokens = " ".join(self.tokenizer.tokenize(clean_text(response_list[idx])))
 
                     log_entry = {
                         "uid": data.non_tensor_batch.get("uid", [None]*len(data))[idx],
@@ -185,7 +192,7 @@ class WikiQARewardManager:
         print(f"Computed rewards for {len(data)} samples.")
         print("Answer scores:", answer_scores)
         print("Format scores:", format_scores)
-
+        exit(1)
         return reward_tensor
 
 
