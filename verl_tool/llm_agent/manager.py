@@ -18,25 +18,13 @@ from .config import AgentActorConfig
 from .tensor_helper import TensorHelper, TensorConfig
 
 
-def make_json_serializable(obj):
-    print(type(obj))
-    print("")
-    if isinstance(obj, np.ndarray):
-        obj = obj.tolist()
-    if isinstance(obj, dict):
-        return {k: make_json_serializable(v) for k, v in obj.items()}
-    if isinstance(obj, list):
-        return [make_json_serializable(v) for v in obj]
-    else:
-        return obj
-
 class AgentActorManager:
     def __init__(
-        self,
-        model_path,
-        actor_rollout_wg,
-        config: AgentActorConfig,
-        is_validation: bool = False,
+            self,
+            model_path,
+            actor_rollout_wg,
+            config: AgentActorConfig,
+            is_validation: bool = False,
     ):
         self.model_path = model_path
         self.tokenizer = hf_tokenizer(self.model_path)
@@ -54,10 +42,12 @@ class AgentActorManager:
             max_start_length=config.max_start_length,
             max_response_length=config.max_response_length,
         ))
-        if config.valid_actions is not None:
-            self.action_stop_tokens = [f"</{action}>" for action in config.valid_actions]
+        if os.path.exists(self.config.action_stop_tokens):
+            with open(self.config.action_stop_tokens, 'r') as f:
+                self.action_stop_tokens = f.read().strip('\n').split(',')
+            print(f"Using action stop tokens: {self.action_stop_tokens}")
         else:
-            self.action_stop_tokens = []
+            raise FileNotFoundError(f"Action stop tokens file '{self.config.action_stop_tokens}' not found.")
 
     def _batch_tokenize(self, responses: List[str]) -> torch.Tensor:
         """Tokenize a batch of responses."""
@@ -80,7 +70,8 @@ class AgentActorManager:
         else:
             n = self.config.n
             inputs = inputs.repeat(n)
-        inputs.non_tensor_batch['traj_ids'] = np.array([str(uuid.uuid4()) for _ in range(len(inputs.batch))], dtype=object)
+        inputs.non_tensor_batch['traj_ids'] = np.array([str(uuid.uuid4()) for _ in range(len(inputs.batch))],
+                                                       dtype=object)
         return inputs
 
     def _postprocess_responses(self, responses: torch.Tensor, action_step: int) -> torch.Tensor:
@@ -116,7 +107,8 @@ class AgentActorManager:
         )['input_ids'].to(torch.int64)
 
         if next_obs_ids.shape[1] > self.config.max_obs_length:
-            print(f"[WARNING] OBSERVATION TOO LONG, CONSIDER CHANGING YOUR CONFIG, {next_obs_ids.shape[1]} & {self.config.max_obs_length}")
+            print(
+                f"[WARNING] OBSERVATION TOO LONG, CONSIDER CHANGING YOUR CONFIG, {next_obs_ids.shape[1]} & {self.config.max_obs_length}")
             if self.config.truncate_obs_side == 'left':
                 next_obs_ids = next_obs_ids[:, -self.config.max_obs_length:]
             elif self.config.truncate_obs_side == 'right':
@@ -126,9 +118,10 @@ class AgentActorManager:
 
         return next_obs_ids
 
-    def _update_rolling_state(self, rollings, cur_responses: torch.Tensor,
-                            next_obs_ids: torch.Tensor) -> Dict:
+    def _update_rolling_state(self, left_side, rollings, cur_responses: torch.Tensor,
+                              next_obs_ids: torch.Tensor) -> Dict:
         """Update rolling state with new responses and observations."""
+
         # Concatenate and handle padding
         new_input_ids = self.tensor_fn.concatenate_with_padding([
             rollings.batch['input_ids'],
@@ -144,23 +137,54 @@ class AgentActorManager:
         effective_len = new_attention_mask.sum(dim=1).max()
         max_len = min(self.config.max_prompt_length, effective_len)
 
-        new_rollings = DataProto.from_dict({
-            'input_ids': new_input_ids[:, -max_len:],
-            'position_ids': new_position_ids[:, -max_len:],
-            'attention_mask': new_attention_mask[:, -max_len:]
-        })
+        if getattr(self.config, "rolling_with_prompt", False):
+            # Added Zhiheng, if rolling_with_prompt is True, then we need to keep the prompt
+            if isinstance(left_side, dict):
+                left_ids = left_side["input_ids"]
+            else:
+                left_ids = left_side.batch["input_ids"]
+
+            left_len = left_ids.size(1)
+
+            if left_len >= max_len:
+                final_input_ids = left_ids[:, -max_len:]
+            else:
+                right_budget = max_len - left_len
+                right_ids_full = new_input_ids[:, left_len:]
+                right_ids = right_ids_full[:, -right_budget:] if right_budget < right_ids_full.size(
+                    1) else right_ids_full
+                final_input_ids = torch.cat([left_ids, right_ids], dim=1)
+
+            final_attention_mask = self.tensor_fn.create_attention_mask(final_input_ids)
+            final_position_ids = self.tensor_fn.create_position_ids(final_attention_mask)
+
+            new_rollings = DataProto.from_dict(
+                {
+                    "input_ids": final_input_ids,
+                    "position_ids": final_position_ids,
+                    "attention_mask": final_attention_mask,
+                }
+            )
+        else:
+            new_rollings = DataProto.from_dict(
+                {
+                    "input_ids": new_input_ids[:, -max_len:],
+                    "position_ids": new_position_ids[:, -max_len:],
+                    "attention_mask": new_attention_mask[:, -max_len:],
+                }
+            )
 
         new_rollings.meta_info.update(rollings.meta_info)
 
         return new_rollings
 
     def _info_masked_concatenate_with_padding(self,
-                prompt: torch.Tensor,
-                prompt_with_mask: torch.Tensor,
-                response: torch.Tensor,
-                info: torch.Tensor = None,
-                pad_to_left: bool = True
-            ) -> torch.Tensor:
+                                              prompt: torch.Tensor,
+                                              prompt_with_mask: torch.Tensor,
+                                              response: torch.Tensor,
+                                              info: torch.Tensor = None,
+                                              pad_to_left: bool = True
+                                              ) -> torch.Tensor:
         """Concatenate tensors and handle padding. Additionally, create a mask (info_mask) to cover the information block if it exists."""
 
         # move `response` and `info` tensor to the same device as `prompt`
@@ -179,7 +203,7 @@ class AgentActorManager:
             tensors.append(info)
 
             # assemble the mask for the observation part
-            info_mask = torch.full(info.size(), pad_id, dtype=info.dtype, device=info.device) # information mask
+            info_mask = torch.full(info.size(), pad_id, dtype=info.dtype, device=info.device)  # information mask
             # extend the mask for the observation part, to update masked tensors
             tensors_with_mask.append(info_mask)
 
@@ -194,61 +218,93 @@ class AgentActorManager:
         return padded_tensor, padded_tensor_with_info
 
     def _update_right_side(self, right_side: Dict,
-                          cur_responses: torch.Tensor,
-                          next_obs_ids: torch.Tensor = None) -> Dict:
+                           cur_responses: torch.Tensor,
+                           next_obs_ids: torch.Tensor = None) -> Dict:
         """Update right side state."""
 
         # observation exists, perform concatenation and masked concatenation
         if next_obs_ids != None:
             responses, responses_with_info_mask = self._info_masked_concatenate_with_padding(
-                    right_side['responses'],
-                    right_side['responses_with_info_mask'],
-                    cur_responses,
-                    next_obs_ids,
-                    pad_to_left=False
-                )
+                right_side['responses'],
+                right_side['responses_with_info_mask'],
+                cur_responses,
+                next_obs_ids,
+                pad_to_left=False
+            )
         else:
             # no observation, only concatenate the response with generated response
             responses, responses_with_info_mask = self._info_masked_concatenate_with_padding(
-                    right_side['responses'],
-                    right_side['responses_with_info_mask'],
-                    cur_responses,
-                    pad_to_left=False
-                )
+                right_side['responses'],
+                right_side['responses_with_info_mask'],
+                cur_responses,
+                pad_to_left=False
+            )
 
         effective_len = self.tensor_fn.create_attention_mask(responses).sum(dim=1).max()
         max_len = min(self.config.max_response_length, effective_len)
 
         # return the updated responses along with its masked version
-        return {'responses': responses[:, :max_len], 'responses_with_info_mask': responses_with_info_mask[:, :max_len]}
+        if self.config.truncate_response_side == 'left':
+            return {'responses': responses[:, :max_len],
+                    'responses_with_info_mask': responses_with_info_mask[:, :max_len]}
+        elif self.config.truncate_response_side == 'right':
+            return {'responses': responses[:, -max_len:],
+                    'responses_with_info_mask': responses_with_info_mask[:, -max_len:]}
+        else:
+            raise ValueError(
+                f"Invalid truncate_response_side: {self.config.truncate_response_side}. Allowed options are 'left' or 'right'.")
 
     def run_llm_loop(self, gen_batch: DataProto) -> Tuple[Dict, Dict]:
+        """Run main LLM generation loop."""
         ori_meta_info = gen_batch.meta_info
         gen_batch = self._preprocess_inputs(gen_batch)
 
         initial_input_ids = gen_batch.batch['input_ids'][:, -self.config.max_start_length:].clone()
+
         original_left_side = {'input_ids': initial_input_ids[:, -self.config.max_start_length:]}
+        # original_right_side = {'responses': initial_input_ids[:, []]}
         original_right_side = {'responses': initial_input_ids[:, []],
                                'responses_with_info_mask': initial_input_ids[:, []]}
-        turns_stats = torch.ones(gen_batch.batch['input_ids'].shape[0], dtype=torch.int)
+
+        turns_stats = torch.zeros(gen_batch.batch['input_ids'].shape[0], dtype=torch.int)
         valid_action_stats = torch.zeros(gen_batch.batch['input_ids'].shape[0], dtype=torch.int)
         active_mask = torch.ones(gen_batch.batch['input_ids'].shape[0], dtype=torch.bool)
         active_num_list = [active_mask.sum().item()]
         rollings = gen_batch
         traj_ids = gen_batch.non_tensor_batch['traj_ids']
 
-        batch_size = gen_batch.batch['input_ids'].shape[0]
-        turns_stats_extra = {
-            "action_lengths": [[] for _ in range(batch_size)],
-            "obs_lengths": [[] for _ in range(batch_size)]
-        }
-
         agent_sampling_params = {
-            "n": 1,
-            "stop": self.action_stop_tokens,
+            "n": 1,  # already repeated by n times in _preprocess_inputs
+            "stop": self.action_stop_tokens,  # stop when generated an end of action
             "include_stop_str_in_output": True,
             "detokenize": True
         }
+        if not self.config.action_before_observation:
+            # Added Zhiheng: Add initial observation to the prompt from server, use response=""
+            do_actions = [True] * len(traj_ids)
+            responses_str = [''] * len(traj_ids)
+            responses_ids = torch.zeros((len(traj_ids), 1), dtype=torch.int64)
+            active_uids = [traj_ids[i] for i in range(len(traj_ids)) if active_mask[i]]
+            next_obs, dones, valid_action = self.interact_with_tool_server(active_uids, responses_str, do_actions,
+                                                                           active_mask)
+            curr_active_mask = torch.tensor([not done for done in dones], dtype=torch.bool)
+            active_mask = active_mask * curr_active_mask
+            active_num_list.append(active_mask.sum().item())
+            # turns_stats[curr_active_mask] += 1
+            valid_action_stats += torch.tensor(valid_action, dtype=torch.int)
+            next_obs_ids = self._process_next_obs(next_obs)
+            rollings = self._update_rolling_state(
+                original_left_side,
+                rollings,
+                responses_ids,
+                next_obs_ids
+            )
+            original_right_side = self._update_right_side(
+                original_right_side,
+                responses_ids,
+                next_obs_ids
+            )
+            # End of Added Zhiheng
 
         # Main generation loop
         for step in range(self.config.max_turns):
@@ -256,38 +312,28 @@ class AgentActorManager:
                 print("All trajectories are done.")
                 break
             print(f"Action step {step + 1}/{self.config.max_turns}")
-
             rollings.batch = self.tensor_fn.cut_to_effective_len(
                 rollings.batch,
                 keys=['input_ids', 'attention_mask', 'position_ids']
             )
+
             rollings_active = DataProto.from_dict({
                 k: v[active_mask] for k, v in rollings.batch.items()
             }, meta_info=ori_meta_info)
-
             with self.actor_rollout_wg.rollout.update_sampling_params(**agent_sampling_params):
                 gen_output = self.actor_rollout_wg.rollout.generate_sequences(rollings_active)
 
+            meta_info = gen_output.meta_info
             responses_ids, responses_str, do_actions = self._postprocess_responses(gen_output.batch['responses'], step)
             responses_ids, _ = self.tensor_fn._example_level_pad(responses_ids, responses_str, active_mask)
+            print(f"Number of active trajectories: {active_mask.sum().item()}")
+            print(f"Length of responses: {responses_ids.shape[1]}")
 
-            print("responses_str", responses_str)
-            print("turns_stats_extra",turns_stats_extra)
-            idx = 0
-            for i, active in enumerate(active_mask):
-                if active:
-                    action_length = len(self.tokenizer.encode(responses_str[idx], add_special_tokens=False))
-                    turns_stats_extra["action_lengths"][i].append(action_length)
-                    idx += 1
-                else:
-                    turns_stats_extra["action_lengths"][i].append(0)
-
-            # Interact with environment
+            # Execute in environment and process observations
             active_uids = [traj_ids[i] for i in range(len(traj_ids)) if active_mask[i]]
-            next_obs, dones, valid_action = self.interact_with_tool_server(
-                active_uids, responses_str, do_actions, active_mask,
-                extra_fields=rollings.non_tensor_batch.get('extra_fields', None)
-            )
+            next_obs, dones, valid_action = self.interact_with_tool_server(active_uids, responses_str, do_actions,
+                                                                           active_mask)
+
             curr_active_mask = torch.tensor([not done for done in dones], dtype=torch.bool)
             active_mask = active_mask * curr_active_mask
             active_num_list.append(active_mask.sum().item())
@@ -296,24 +342,25 @@ class AgentActorManager:
 
             next_obs_ids = self._process_next_obs(next_obs)
 
-            obs_idx = 0
-            for i, active in enumerate(active_mask):
-                if i >= len(turns_stats_extra["obs_lengths"]):
-                    break
-                if active:
-                    obs_length = next_obs_ids[obs_idx].shape[0]
-                    turns_stats_extra["obs_lengths"][i].append(int(obs_length))
-                    obs_idx += 1
-                else:
-                    turns_stats_extra["obs_lengths"][i].append(0)
+            # Added Zhiheng: max_action_length, only keep the first max_action_length tokens
+            next_obs_ids = next_obs_ids[:, :self.config.max_action_length]
 
+            # Update states
             rollings = self._update_rolling_state(
-                rollings, responses_ids, next_obs_ids
+                original_left_side,
+                rollings,
+                responses_ids,
+                next_obs_ids
             )
             original_right_side = self._update_right_side(
-                original_right_side, responses_ids, next_obs_ids
+                original_right_side,
+                responses_ids,
+                next_obs_ids
             )
 
+        agent_sampling_params = {
+            "n": 1,  # already repeated by n times in _preprocess_inputs
+        }  # reomve stop related params in the last call
         # final LLM rollout
         if active_mask.sum():
             rollings.batch = self.tensor_fn.cut_to_effective_len(
@@ -331,57 +378,47 @@ class AgentActorManager:
             responses_ids, responses_str, do_actions = self._postprocess_responses(gen_output.batch['responses'], step)
             responses_ids, _ = self.tensor_fn._example_level_pad(responses_ids, responses_str, active_mask)
 
-            # Execute in environment and process observations
-            active_uids = [traj_ids[i] for i in range(len(traj_ids)) if active_mask[i]]
-            next_obs, dones, valid_action = self.interact_with_tool_server(active_uids, responses_str, do_actions, active_mask)
+            dones = []
+            j = 0
+            for i, active in enumerate(active_mask):
+                if not active:
+                    dones.append(1)
+                else:
+                    if do_actions[j]:
+                        dones.append(0)
+                    else:
+                        dones.append(1)
+                    j += 1
+            assert j == len(do_actions), f"j: {j}, len(do_actions): {len(do_actions)}"
 
             curr_active_mask = torch.tensor([not done for done in dones], dtype=torch.bool)
             active_mask = active_mask * curr_active_mask
             active_num_list.append(active_mask.sum().item())
-            valid_action_stats += torch.tensor(valid_action, dtype=torch.int)
 
             original_right_side = self._update_right_side(
                 original_right_side,
                 responses_ids,
             )
 
-        meta_info['turns_stats'] = turns_stats.tolist()
-        meta_info['active_mask'] = active_mask.tolist()
-        meta_info['valid_action_stats'] = valid_action_stats.tolist()
-        meta_info['turns_stats_extra'] = turns_stats_extra
+        # meta_info['turns_stats'] = turns_stats.tolist()
+        # meta_info['active_mask'] = active_mask.tolist()
+        # meta_info['valid_action_stats'] = valid_action_stats.tolist()
+        non_tensors = {
+            'traj_ids': traj_ids.tolist(),
+            'turns_stats': turns_stats.tolist(),
+            'valid_action_stats': valid_action_stats.tolist(),
+            'active_mask': active_mask.tolist(),
+        }
 
         print("ACTIVE_TRAJ_NUM:", active_num_list)
 
-        results = self._compose_final_output(original_left_side, original_right_side, meta_info)
-
-        print(results)
-        print("^"*100)
-        # exit(1)
+        results = self._compose_final_output(original_left_side, original_right_side, non_tensors, meta_info)
         return results
 
     def _compose_final_output(self, left_side: Dict,
-                            right_side: Dict,
-                            meta_info: Dict) -> Tuple[Dict, Dict]:
-        # print("Composing final output...")
-        # print("left_side", left_side)
-        # print("right_side", right_side)
-        # print("meta_info", meta_info)
-        # print("#"*100)
-        # exit(1)
-        """
-        (WorkerDict pid=2207082) Composing final output...
-        (WorkerDict pid=2207082) left_side {'input_ids': tensor([[151643, 151643, 151643,  ..., 151644,  77091,    198],
-        (WorkerDict pid=2207082)         [151643, 151643, 151643,  ..., 151644,  77091,    198]],
-        (WorkerDict pid=2207082)        device='cuda:0')}
-        (WorkerDict pid=2207082) right_side {'responses': tensor([[ 13708,    766,  93376,  ..., 151643, 151643, 151643],
-        (WorkerDict pid=2207082)         [ 13708,    766,  93376,  ...,  57362, 133578, 123864]],
-        (WorkerDict pid=2207082)        device='cuda:0'), 'responses_with_info_mask': tensor([[ 13708,    766,  93376,  ..., 151643, 151643, 151643],
-        (WorkerDict pid=2207082)         [ 13708,    766,  93376,  ...,  57362, 133578, 123864]],
-        (WorkerDict pid=2207082)        device='cuda:0')}
-        (WorkerDict pid=2207082) meta_info {'turns_stats': [2, 5], 'active_mask': [False, True], 'valid_action_stats': [2, 5]}
-        (WorkerDict pid=2207082) ####################################################################################################
-        """
-
+                              right_side: Dict,
+                              non_tensors: Dict,
+                              meta_info: Dict) -> Tuple[Dict, Dict]:
         """Compose final generation output."""
         final_output = right_side.copy()
         final_output['prompts'] = left_side['input_ids']
@@ -425,19 +462,13 @@ class AgentActorManager:
             final_output['attention_mask']
         )
 
-        final_output = DataProto.from_dict(final_output)
+        final_output = DataProto.from_dict(final_output, non_tensors=non_tensors)
         final_output.meta_info.update(meta_info)
-        if "turns_stats_extra" in meta_info and "action_lengths" in meta_info["turns_stats_extra"]:
-            final_output.non_tensor_batch["action_lengths"] = np.array(meta_info["turns_stats_extra"]["action_lengths"],
-                                                                       dtype=object)
-        if "turns_stats_extra" in meta_info and "obs_lengths" in meta_info["turns_stats_extra"]:
-            final_output.non_tensor_batch["obs_lengths"] = np.array(meta_info["turns_stats_extra"]["obs_lengths"],
-                                                                    dtype=object)
 
         return final_output
 
-    def interact_with_tool_server(self, active_uids:List[str], responses: List[str], do_actions:List[bool],
-                                  active_mask=None, extra_fields=None) -> List[str]:
+    def interact_with_tool_server(self, active_uids: List[str], responses: List[str], do_actions: List[bool],
+                                  active_mask=None) -> List[str]:
         """
         Call tool server for queries.
         Args:
@@ -450,39 +481,30 @@ class AgentActorManager:
             dones: dones
             valid_actions: valid actions
         """
-        assert len(active_uids) == len(responses) == len(do_actions), f"Length mismatch: {len(active_uids)}, {len(responses)}, {len(do_actions)}"
+        assert len(active_uids) == len(responses) == len(
+            do_actions), f"Length mismatch: {len(active_uids)}, {len(responses)}, {len(do_actions)}"
         data = {
             "trajectory_ids": active_uids,
             "actions": responses,
-            "finish": [not do_action for do_action in do_actions], # if do_action is False, then it is a finish action, finishing the trajectory,
+            "finish": [not do_action for do_action in do_actions],
+            # if do_action is False, then it is a finish action, finishing the trajectory,
         }
-        # print("#"*100)
-        # print("#### extra_fields ####", extra_fields)
-        # TODO Convert to JSON serializable format
-        if extra_fields is not None:
-            data['extra_fields'] = make_json_serializable(extra_fields)
-
         print(f"Sending request to {self.config.tool_server_url}")
         print(f" - Number of non-finished actions: {len([x for x in do_actions if not x])} / {len(do_actions)}")
-        print("self.config.tool_server_url", self.config.tool_server_url)
-        # print("data", data)
-        # print("#"*100)
         response = requests.post(self.config.tool_server_url, json=data)
-        # print("$$$$ response", response.json(), "$$$$")
         active_observations = response.json()['observations']
         active_dones = [int(x) for x in response.json()['dones']]
         active_valid_actions = [int(x) for x in response.json()['valids']]
         print("Received observations from tool server. Samples:", len(active_observations))
-        print(f" - Number of valid actions (exclusing finish action): {len([x for x in active_valid_actions if x])} / {len(active_valid_actions)}")
+        print(
+            f" - Number of valid actions (exclusing finish action): {len([x for x in active_valid_actions if x])} / {len(active_valid_actions)}")
         print(f" - Number of dones: {len([x for x in active_dones if x])} / {len(active_dones)}")
-        # print("Example observations:")
-        # non_empty_observations = [obs for obs in active_observations if obs]
-        # if len(non_empty_observations) > 0:
-        #     print(f"{non_empty_observations[0]}")
-        # else:
-        #     print("No non-empty observations.")
-        # print("#"*100)
-        # exit(1)
+        print("Example observations:")
+        non_empty_observations = [obs for obs in active_observations if obs]
+        if len(non_empty_observations) > 0:
+            print(f"{non_empty_observations[0]}")
+        else:
+            print("No non-empty observations.")
 
         next_obs, dones, valid_action = [], [], []
         for i, active in enumerate(active_mask):
