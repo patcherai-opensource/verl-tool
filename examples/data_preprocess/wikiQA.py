@@ -237,7 +237,7 @@ def main():
                 "data_source": "wiki_qa",
                 "prompt": [
                     {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_prompt},
+                    # {"role": "user", "content": user_prompt}, # Get the observation from environment
                 ],
                 "ability": "wiki",
                 "reward_model": {

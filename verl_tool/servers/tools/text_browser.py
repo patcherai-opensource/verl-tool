@@ -85,7 +85,7 @@ class TextBrowserTool(BaseTool):
             actor = self.env_actors[trajectory_id]
 
             # Decide whether to render or step
-            fut = actor.start_env.remote() if action is None else actor.step_env.remote(action)
+            fut = actor.start_env.remote() if action is None or action == "" else actor.step_env.remote(action)
             futures.append((i, trajectory_id, fut))
 
             self._cleanup_actors_if_needed()
