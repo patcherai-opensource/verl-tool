@@ -13,7 +13,7 @@ n=4
 batch_size=16
 ppo_mini_batch_size=4
 max_prompt_length=2048 # bottleneck of the rollout, by default keep the right side
-max_response_length=10240 # bottleneck of the right side, will used in the training
+max_response_length=5120 # bottleneck of the right side, will used in the training
 max_obs_length=2048 # Not the bottleneck, the obs is much shorter than this
 temperature=0.5
 strategy="fsdp_agent" # remove _agent for normal verl behavior
@@ -28,7 +28,7 @@ action_before_observation=False
 truncate_obs_side=left # This is weird but required in the current code
 truncate_response_side=left
 
-mirco_batch_size=2
+mirco_batch_size=1
 mirco_batch_size_non_train=4
 max_start_length=1536 # System prompt is always length 800+, not the bottleneck
 # === end, added by Zhiheng ===

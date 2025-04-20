@@ -95,8 +95,9 @@ class WikiQARewardManager:
         """
         print("")
         print(data)
+        print(len(data))
         import pickle
-        with open("data_stub_new.pkl", "wb") as f:
+        with open("data_stub_new_qwq.pkl", "wb") as f:
             pickle.dump(data, f)
 
         import json
@@ -200,7 +201,7 @@ if __name__ == '__main__':
     import pickle
 
     # Load the saved data object from disk
-    with open("data_stub.pkl", "rb") as f:
+    with open("data_stub_new.pkl", "rb") as f:
         dummy_data = pickle.load(f)
 
     # Instantiate the WikiQARewardManager (you can pass in config if needed)
