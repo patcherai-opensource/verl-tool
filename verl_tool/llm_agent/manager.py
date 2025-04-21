@@ -478,57 +478,91 @@ class AgentActorManager:
         results = self._compose_final_output(original_left_side, original_right_side, non_tensors, ori_meta_info)
         return results
 
-    def _compose_final_output(self, left_side: Dict,
-                              right_side: Dict,
-                              non_tensors: Dict,
-                              meta_info: Dict) -> Tuple[Dict, Dict]:
-        """Compose final generation output."""
+    def _compose_final_output(
+        self,
+        left_side: Dict,
+        right_side: Dict,
+        non_tensors: Dict,
+        meta_info: Dict
+    ) -> Tuple[Dict, Dict]:
+        """
+        Compose the final output of the rollout by merging prompt and response
+        components, padding sequences as needed, and ensuring all turn-level
+        non-tensor fields are aligned in shape for safe concatenation across samples.
+        """
+        # ---------- 1. Pad turn-level lists to the same length ----------
+        pad_len = self.config.max_turns + 2  # buffer to avoid mismatch
+
+        def _pad(seq_list, fill_value=0):
+            """
+            Pad or truncate a list to match pad_len.
+            This is used for per-turn statistics like action_lengths or obs_lengths.
+            """
+            if len(seq_list) < pad_len:
+                seq_list += [fill_value] * (pad_len - len(seq_list))
+            else:
+                seq_list[:] = seq_list[:pad_len]
+            return seq_list
+
+        if "action_lengths" in non_tensors:
+            non_tensors["action_lengths"] = [
+                _pad(traj, 0) for traj in non_tensors["action_lengths"]
+            ]
+        if "obs_lengths" in non_tensors:
+            non_tensors["obs_lengths"] = [
+                _pad(traj, 0) for traj in non_tensors["obs_lengths"]
+            ]
+
+        # ---------- 2. Build final tensor fields ----------
         final_output = right_side.copy()
-        final_output['prompts'] = left_side['input_ids']
+        final_output["prompts"] = left_side["input_ids"]
 
-        # padding responses length to max_response_length
-        if final_output['responses'].shape[1] < self.config.max_response_length:
-            final_output['responses'] = self.tensor_fn.pad_tensor(
-                final_output['responses'],
-                max_length=self.config.max_response_length,
-                padding_side='right'
-            )
+        # Pad response tensors to max_response_length
+        for key in ("responses", "responses_with_info_mask"):
+            if final_output[key].shape[1] < self.config.max_response_length:
+                final_output[key] = self.tensor_fn.pad_tensor(
+                    final_output[key],
+                    max_length=self.config.max_response_length,
+                    padding_side="right",
+                )
 
-        # padding response_with_info_mask length to max_response_length
-        if final_output['responses_with_info_mask'].shape[1] < self.config.max_response_length:
-            final_output['responses_with_info_mask'] = self.tensor_fn.pad_tensor(
-                final_output['responses_with_info_mask'],
-                max_length=self.config.max_response_length,
-                padding_side='right'
-            )
-
-        # Combine input IDs
-        final_output['input_ids'] = torch.cat([
-            left_side['input_ids'],
-            final_output['responses']
-        ], dim=1)
-
-        # Create attention mask
-        final_output['attention_mask'] = torch.cat([
-            self.tensor_fn.create_attention_mask(left_side['input_ids']),
-            self.tensor_fn.create_attention_mask(final_output['responses'])
-        ], dim=1)
-
-        # Create observation mask
-        final_output['info_mask'] = torch.cat([
-            self.tensor_fn.create_attention_mask(left_side['input_ids']),
-            self.tensor_fn.create_attention_mask(final_output['responses_with_info_mask'])
-        ], dim=1)
-
-        # Create position ids
-        final_output['position_ids'] = self.tensor_fn.create_position_ids(
-            final_output['attention_mask']
+        # Concatenate prompt and response tokens
+        final_output["input_ids"] = torch.cat(
+            [left_side["input_ids"], final_output["responses"]], dim=1
         )
 
+        # Construct attention mask
+        final_output["attention_mask"] = torch.cat(
+            [
+                self.tensor_fn.create_attention_mask(left_side["input_ids"]),
+                self.tensor_fn.create_attention_mask(final_output["responses"]),
+            ],
+            dim=1,
+        )
+
+        # Construct info mask used to mark observation content
+        final_output["info_mask"] = torch.cat(
+            [
+                self.tensor_fn.create_attention_mask(left_side["input_ids"]),
+                self.tensor_fn.create_attention_mask(
+                    final_output["responses_with_info_mask"]
+                ),
+            ],
+            dim=1,
+        )
+
+        # Construct position ids for model input
+        final_output["position_ids"] = self.tensor_fn.create_position_ids(
+            final_output["attention_mask"]
+        )
+
+        # ---------- 3. Create and return DataProto ----------
         final_output = DataProto.from_dict(final_output, non_tensors=non_tensors)
         final_output.meta_info.update(meta_info)
 
         return final_output
+
+
 
     def interact_with_tool_server(self, active_uids:List[str], responses: List[str], do_actions:List[bool],
                                   active_mask=None, extra_fields=None) -> List[str]:
