@@ -93,52 +93,109 @@ class WikiQARewardManager:
             "format_score": <float>
         }
         """
-        print("")
-        print(data)
-        print(len(data))
-        import pickle
-        with open("data_stub_new_qwq.pkl", "wb") as f:
-            pickle.dump(data, f)
+        # print("")
+        # print(data)
+        # print(len(data))
+        # import pickle
+        # with open("data_stub_addBrowserTag.pkl", "wb") as f:
+        #     pickle.dump(data, f)
 
         import json
         from pathlib import Path
 
+        # special_token_ids = set(self.tokenizer.all_special_ids)
+        #
+        # actions_list, observations_list, response_list = [], [], []
+        #
+        # # ---------- 1.  decode actions / obs / responses --------------------
+        # for i in range(len(data)):
+        #     input_ids = data.batch["input_ids"][i].tolist()
+        #     attention_mask = data.batch["attention_mask"][i].tolist()
+        #     action_lens = data.non_tensor_batch["action_lengths"][i]
+        #     obs_lens = data.non_tensor_batch["obs_lengths"][i]
+        #
+        #     prompt_len = data.batch["prompts"][i].shape[-1]
+        #     resp_ids   = input_ids[prompt_len:]
+        #     resp_mask  = attention_mask[prompt_len:]
+        #     resp_tokens = [
+        #         tid for tid, m in zip(resp_ids, resp_mask)
+        #         if m == 1 and tid not in special_token_ids
+        #     ]
+        #     resp_text = self.tokenizer.decode(resp_tokens,
+        #                                       skip_special_tokens=True).strip()
+        #     response_list.append(resp_text)
+        #
+        #     cursor, actions, observations = 0, [], []
+        #     for a_len, o_len in zip(action_lens, obs_lens):
+        #         actions.append(self.tokenizer.decode(
+        #             resp_tokens[cursor:cursor + a_len - 1],
+        #             skip_special_tokens=True).strip())
+        #         cursor += a_len - 1
+        #         observations.append(self.tokenizer.decode(
+        #             resp_tokens[cursor:cursor + o_len - 1],
+        #             skip_special_tokens=True).strip())
+        #         cursor += o_len - 1
+        #     if cursor < len(resp_tokens):
+        #         actions.append(self.tokenizer.decode(
+        #             resp_tokens[cursor:],
+        #             skip_special_tokens=True).strip())
+        #
+        #     actions_list.append(actions)
+        #     observations_list.append(observations)
+
+        # ------------------------------------------------------------------ #
+        # Prepare                                                            #
+        # ------------------------------------------------------------------ #
         special_token_ids = set(self.tokenizer.all_special_ids)
+        pattern = re.compile(r"<browser>(.*?)</browser>", re.DOTALL)
 
         actions_list, observations_list, response_list = [], [], []
 
-        # ---------- 1.  decode actions / obs / responses --------------------
+        # ------------------------------------------------------------------ #
+        # Main loop                                                          #
+        # ------------------------------------------------------------------ #
         for i in range(len(data)):
+            # 1) 取出响应部分的 token
             input_ids = data.batch["input_ids"][i].tolist()
             attention_mask = data.batch["attention_mask"][i].tolist()
-            action_lens = data.non_tensor_batch["action_lengths"][i]
-            obs_lens = data.non_tensor_batch["obs_lengths"][i]
+            prompt_len = data.batch["prompts"][i].shape[-1]
 
-            prompt_len = 2048
-            resp_ids   = input_ids[prompt_len:]
-            resp_mask  = attention_mask[prompt_len:]
+            resp_ids = input_ids[prompt_len:]
+            resp_mask = attention_mask[prompt_len:]
             resp_tokens = [
                 tid for tid, m in zip(resp_ids, resp_mask)
                 if m == 1 and tid not in special_token_ids
             ]
+
+            # 2) 解码完整 response 文本
             resp_text = self.tokenizer.decode(resp_tokens,
                                               skip_special_tokens=True).strip()
             response_list.append(resp_text)
 
-            cursor, actions, observations = 0, [], []
-            for a_len, o_len in zip(action_lens, obs_lens):
-                actions.append(self.tokenizer.decode(
-                    resp_tokens[cursor:cursor + a_len - 1],
-                    skip_special_tokens=True).strip())
-                cursor += a_len - 1
-                observations.append(self.tokenizer.decode(
-                    resp_tokens[cursor:cursor + o_len - 1],
-                    skip_special_tokens=True).strip())
-                cursor += o_len - 1
-            if cursor < len(resp_tokens):
-                actions.append(self.tokenizer.decode(
-                    resp_tokens[cursor:],
-                    skip_special_tokens=True).strip())
+            # 3) 基于 <browser> 标签提取 observation / action
+            actions, observations = [], []
+            last_end = 0
+            for match in pattern.finditer(resp_text):
+                # —— observation 之前的文本属于 action
+                act_seg = resp_text[last_end:match.start()].strip()
+                if act_seg:
+                    actions.append(act_seg)
+
+                # —— 标签内部文本为 observation
+                obs_seg = match.group(1).strip()
+                observations.append(obs_seg)
+
+                last_end = match.end()
+
+            # 4) 末尾无标签的残余文本 ➜ action
+            tail = resp_text[last_end:].strip()
+            if tail:
+                actions.append(tail)
+
+            # 5) 如果不是 action‑first，丢掉首个 action（即首个 observation 之前的部分）
+            if not getattr(self, "action_first", True):
+                if actions:
+                    actions = actions[1:]
 
             actions_list.append(actions)
             observations_list.append(observations)
@@ -193,7 +250,7 @@ class WikiQARewardManager:
         print(f"Computed rewards for {len(data)} samples.")
         print("Answer scores:", answer_scores)
         print("Format scores:", format_scores)
-        exit(1)
+        # exit(1)
         return reward_tensor
 
 
@@ -201,7 +258,8 @@ if __name__ == '__main__':
     import pickle
 
     # Load the saved data object from disk
-    with open("data_stub_new.pkl", "rb") as f:
+    # with open("data_stub_new.pkl", "rb") as f:
+    with open("/home/zhiheng/verl-tool/data_stub_addBrowserTag.pkl", "rb") as f:
         dummy_data = pickle.load(f)
 
     # Instantiate the WikiQARewardManager (you can pass in config if needed)
