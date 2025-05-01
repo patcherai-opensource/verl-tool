@@ -24,12 +24,12 @@ token of
 # === begin, added by Zhiheng ===
 max_action_length=512
 rolling_with_prompt=False
-action_before_observation=False
+call_tool_first=True
 truncate_obs_side=left # This is weird but required in the current code
 truncate_response_side=left
-
+min_action_num=5
 mirco_batch_size=1
-mirco_batch_size_non_train=4
+mirco_batch_size_non_train=2
 max_start_length=1536 # System prompt is always length 800+, not the bottleneck
 # === end, added by Zhiheng ===
 
@@ -71,7 +71,8 @@ PYTHONUNBUFFERED=1 python3 -m verl_tool.trainer.main_ppo \
     +actor_rollout_ref.agent.max_obs_length=$max_obs_length \
     +actor_rollout_ref.agent.max_action_length=$max_action_length \
     +actor_rollout_ref.agent.rolling_with_prompt=$rolling_with_prompt \
-    +actor_rollout_ref.agent.action_before_observation=$action_before_observation \
+    +actor_rollout_ref.agent.call_tool_first=call_tool_first \
+    +actor_rollout_ref.agent.min_action_num=$min_action_num \
     +actor_rollout_ref.agent.truncate_response_side=$truncate_response_side \
     +actor_rollout_ref.agent.truncate_obs_side=$truncate_obs_side \
     +actor_rollout_ref.agent.max_turns=5 \
@@ -80,7 +81,7 @@ PYTHONUNBUFFERED=1 python3 -m verl_tool.trainer.main_ppo \
     +actor_rollout_ref.agent.no_action_as_stop=False \
     actor_rollout_ref.rollout.log_prob_micro_batch_size_per_gpu=$mirco_batch_size_non_train \
     actor_rollout_ref.rollout.tensor_model_parallel_size=1 \
-    actor_rollout_ref.rollout.gpu_memory_utilization=0.4 \
+    actor_rollout_ref.rollout.gpu_memory_utilization=0.8 \
     actor_rollout_ref.rollout.temperature=$temperature \
     actor_rollout_ref.rollout.top_k=-1 \
     actor_rollout_ref.rollout.n=$n \
@@ -94,7 +95,7 @@ PYTHONUNBUFFERED=1 python3 -m verl_tool.trainer.main_ppo \
     trainer.logger=['console','wandb'] \
     trainer.project_name='wikiRL' \
     trainer.experiment_name=$run_name \
-    +trainer.val_before_train=False \
+    trainer.val_before_train=False \
     trainer.default_hdfs_dir=null \
     trainer.n_gpus_per_node=$n_gpus_per_node \
     trainer.nnodes=$n_nodes \

@@ -76,7 +76,7 @@ class WikiRLRewardManager:
     #     #     pickle.dump(data, f)
     #     pass
 
-    def __call__(self, data: DataProto):
+    def __call__(self, data: DataProto, return_dict=False):
         """
         Compute scalar rewards for a batch and append per‑sample logs to
         ``reward_manager_history.jsonl``.
@@ -193,8 +193,13 @@ class WikiRLRewardManager:
         print(f"Computed rewards for {len(data)} samples.")
         print("Answer scores:", answer_scores)
         print("Format scores:", format_scores)
-        exit(1)
-        return reward_tensor
+        # exit(1)
+        if return_dict:
+            return {
+                "reward_tensor": reward_tensor,
+            }
+        else:
+            return reward_tensor
 
 
 if __name__ == '__main__':

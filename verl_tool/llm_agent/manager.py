@@ -569,6 +569,15 @@ class AgentActorManager:
         """
         safe_payload = sanitize_request(batch_data)
         response = requests.post(self.config.tool_server_url, json=safe_payload)
+        # print("#"*100)
+        # print(safe_payload)
+        # print("Length of trajectory ids:", len(safe_payload['trajectory_ids']))
+        # print("Length of actions:", len(safe_payload['actions']))
+        # print("Length of finish:", len(safe_payload['finish']))
+        # print("Length of extra fields:", len(safe_payload.get('extra_fields', [])))
+        # print("$"*100)
+        # print(response)
+        # print("#"*100)
         if response.status_code != 200:
             print(f"Error: {response.status_code}, {response.text}")
             raise ValueError(f"Error: {response.status_code}, {response.text}")
@@ -601,9 +610,12 @@ class AgentActorManager:
             "finish": finishs, # if do_action is False, then it is a finish action, finishing the trajectory,
         }
         if extra_fields is not None:
-            batch_data['extra_fields'] = extra_fields
+            active_extra_fields = [extra_fields[i] for i in range(len(extra_fields)) if active_mask[i]]
+            batch_data['extra_fields'] = active_extra_fields
         print(f" - Number of finished responses: {len([x for x in do_actions if not x])} / {len(do_actions)}")
         response = self.send_batch_requests(batch_data)
+        # print("Response from tool server:", response)
+        # print("#" * 100)
         active_observations = response['observations']
         active_dones = [int(x) for x in response['dones']]
         active_valid_actions = [int(x) for x in response['valids']]
