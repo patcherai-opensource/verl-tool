@@ -1,14 +1,23 @@
+# export CUDA_VISIBLE_DEVICES=4,5,6,7
 set -x
 dataset_name=wikiQA
 train_data=$(pwd)/data/$dataset_name/train.parquet
 val_data=$(pwd)/data/$dataset_name/test.parquet
-model_name=/data/zhiheng/cogito/qwen2.5-3b-1epoch-hard
+model_name=/data/zhiheng/cogito/base_models/qwen2.5-3b-1epoch-hard
 rl_alg=grpo # gae(ppo) or grpo, if grpo, then better set n>1 otherwise the group norm can not be effective
-n_gpus_per_node=4
+
 n_nodes=1
 n=4
-batch_size=16
-ppo_mini_batch_size=4
+# If there is 4 GPU
+# n_gpus_per_node=2
+#batch_size=16
+#ppo_mini_batch_size=4
+
+# If there is 2 GPU
+n_gpus_per_node=2
+batch_size=8
+ppo_mini_batch_size=2
+
 max_prompt_length=2048
 max_response_length=5120
 max_obs_length=2048
