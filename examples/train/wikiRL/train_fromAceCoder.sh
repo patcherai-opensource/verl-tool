@@ -2,13 +2,13 @@ set -x
 dataset_name=wikiQA
 train_data=$(pwd)/data/$dataset_name/train.parquet
 val_data=$(pwd)/data/$dataset_name/test.parquet
-model_name=/home/zhiheng/cogito/base_models/qwen2.5-3b-1epoch-hard
+model_name=/data/zhiheng/cogito/qwen2.5-3b-1epoch-hard
 rl_alg=grpo # gae(ppo) or grpo, if grpo, then better set n>1 otherwise the group norm can not be effective
 n_gpus_per_node=4
 n_nodes=1
 n=4
 batch_size=16
-ppo_mini_batch_size=$batch_size
+ppo_mini_batch_size=4
 max_prompt_length=2048
 max_response_length=5120
 max_obs_length=2048
@@ -43,8 +43,9 @@ valid_actions="[]"           # e.g. [answer,python] if needed
 ## === end added ===
 
 model_pretty_name=$(echo $model_name | tr '/' '_' | tr '[:upper:]' '[:lower:]')
+run_name_prefix="FromAcecoder"
 run_name_postfix=""
-run_name="${reward_manager}-${strategy}-${model_pretty_name}-${rl_alg}-n${n}-b${batch_size}-t${temperature}-lr${lr}${run_name_postfix}"
+run_name="${run_name_prefix}-${reward_manager}-${strategy}-${model_pretty_name}-${rl_alg}-n${n}-b${batch_size}-t${temperature}-lr${lr}${run_name_postfix}"
 export VERL_RUN_ID=$run_name
 
 # temp file for action tokens as verl cannot pass special strs as params
@@ -100,7 +101,6 @@ PYTHONUNBUFFERED=1 python3 -m verl_tool.trainer.main_ppo \
     +actor_rollout_ref.agent.max_turns=$max_turns \
     +actor_rollout_ref.agent.num_gpus=$n_gpus_per_node \
     +actor_rollout_ref.agent.action_stop_tokens=$action_stop_tokens_file \
-    # ---------- zhiheng: agent extra limits / behaviors ----------
     +actor_rollout_ref.agent.max_action_length=$max_action_length \
     +actor_rollout_ref.agent.rolling_with_prompt=$rolling_with_prompt \
     +actor_rollout_ref.agent.call_tool_first=$call_tool_first \
@@ -108,7 +108,6 @@ PYTHONUNBUFFERED=1 python3 -m verl_tool.trainer.main_ppo \
     +actor_rollout_ref.agent.truncate_response_side=$truncate_response_side \
     +actor_rollout_ref.agent.truncate_obs_side=$truncate_obs_side \
     +actor_rollout_ref.agent.valid_actions=$valid_actions \
-    # ---------- zhiheng: end of extra limits / behaviors ----------
     actor_rollout_ref.rollout.tensor_model_parallel_size=$tensor_model_parallel_size \
     actor_rollout_ref.rollout.log_prob_micro_batch_size_per_gpu=$log_prob_micro_batch_size_per_gpu \
     actor_rollout_ref.rollout.name=vllm \
