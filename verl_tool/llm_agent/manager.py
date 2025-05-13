@@ -167,7 +167,7 @@ class AgentActorManager:
 
         # Cut to appropriate length
         effective_len = new_attention_mask.sum(dim=1).max()
-        max_len = min(self.config.max_prompt_length, effective_len)
+        max_len = min(self.config.max_prompt_length+self.config.max_response_length, effective_len)
 
         if getattr(self.config, "rolling_with_prompt", False):
             # Added Zhiheng, if rolling_with_prompt is True, then we need to keep the system prompt
