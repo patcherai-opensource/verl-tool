@@ -107,7 +107,7 @@ class ModelService:
                 "valids": [False for _ in range(len(trajectory_ids))]
             }
     
-    async def post_process_observations(self, observations: List[str], dones: List[bool], valid_action: List[bool]):
+    async def post_process_observations(self, observations: List[str], dones: List[bool] = None, valid_action: List[bool] = None):
         """Process observations using the tokenizer with proper async locks"""
         async with self.encode_lock:
             mtrl_sep = self.tool_config.mtrl_sep
@@ -153,7 +153,7 @@ class ModelService:
             finish = True
             if active_finish_reasons[i] == "stop" and outputs.choices[i].stop_reason is not None or \
                 self.tool_config.min_action_num >= action_step:
-                active_responses[i] = active_responses[i] + outputs.choices[i].stop_reason
+                active_responses[i] = active_responses[i] # + outputs.choices[i].stop_reason
                 if self.tool_config.enable_mtrl:
                     active_responses[i] += self.tool_config.turn_end_token
                 finish = False
@@ -324,6 +324,9 @@ class ModelService:
                     active_masks[i] = not dones[active_idx]
                     active_idx += 1
             
+        # cleaning excessive backticks
+        final_responses = [clean_excessive_backticks(response) for response in final_responses]
+            
         return final_responses, finish_reasons
     
     async def chat_completions_async(self, body: Dict[str, Any]) -> Dict[str, Any]:
@@ -350,7 +353,7 @@ class ModelService:
             "temperature": body.get("temperature", 1.0),
             "max_tokens": body.get("max_tokens", body.get("max_completion_tokens", 512)),
             "top_p": body.get("top_p", 1.0),
-            "stop": list(set(body.get("stop", []) + self.tool_config.action_stop_tokens)),
+            "stop": list(set(body.get("stop", []) + self.tool_config.action_stop_tokens + ["``` ``` ``` ```"])),
         }
 
         all_responses, finish_reasons = await self.generate_with_tools(prompts, sampling_params)
@@ -406,7 +409,7 @@ class ModelService:
             "temperature": body.get("temperature", 1.0),
             "max_tokens": body.get("max_tokens", body.get("max_completion_tokens", 512)),
             "top_p": body.get("top_p", 1.0),
-            "stop": list(set(body.get("stop", []) + self.tool_config.action_stop_tokens)),
+            "stop": list(set(body.get("stop", []) + self.tool_config.action_stop_tokens + ["``` ``` ``` ```"])),
         }
 
         all_responses, finish_reasons = await self.generate_with_tools(prompts, sampling_params)
@@ -468,3 +471,26 @@ class ModelService:
         except RuntimeError:
             # Handle "Event loop is closed" error that can happen during shutdown
             pass
+
+def clean_excessive_backticks(text):
+    """
+    清理模型输出中的过多反引号，处理两种情况：
+    1. 连续多个反引号（如 ````````）
+    2. 多组三个反引号（如 ``` ``` ``` ```）
+    
+    保留合法的Markdown代码块格式
+    """
+    import re
+    
+    # 步骤2：清理连续的反引号
+    def clean_backticks(text):
+        # 将连续4个及以上的反引号替换为3个
+        text = re.sub(r"`{4,}", "```", text)
+        # 将多组三个反引号（被空格或换行符隔开）替换为单个三个反引号
+        text = re.sub(r"```([\s\n]+```)+", "```", text)
+        return text
+    
+    # 执行清理流程
+    cleaned_text = clean_backticks(text)
+    
+    return cleaned_text
