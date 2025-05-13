@@ -356,7 +356,8 @@ class ModelService:
                     active_idx += 1
             
         # cleaning excessive backticks
-        final_responses = [clean_excessive_backticks(response) for response in final_responses]
+        if self.tool_config.force_post_processing:
+            final_responses = [clean_excessive_backticks(response) for response in final_responses]
             
         return final_responses, finish_reasons
     
@@ -384,7 +385,7 @@ class ModelService:
             "temperature": body.get("temperature", 1.0),
             "max_tokens": body.get("max_tokens", body.get("max_completion_tokens", 512)),
             "top_p": body.get("top_p", 1.0),
-            "stop": list(set(body.get("stop", []) + self.tool_config.action_stop_tokens + ["``` ``` ``` ```"])),
+            "stop": list(set(body.get("stop", []) + self.tool_config.action_stop_tokens + self.tool_config.special_stop_tokens)),
         }
 
         # print(f"Sampling params: {sampling_params}")
@@ -441,7 +442,7 @@ class ModelService:
             "temperature": body.get("temperature", 1.0),
             "max_tokens": body.get("max_tokens", body.get("max_completion_tokens", 512)),
             "top_p": body.get("top_p", 1.0),
-            "stop": list(set(body.get("stop", []) + self.tool_config.action_stop_tokens + ["``` ``` ``` ```"])),
+            "stop": list(set(body.get("stop", []) + self.tool_config.action_stop_tokens + self.tool_config.special_stop_tokens)),
         }
 
         all_responses, finish_reasons = await self.generate_with_tools(prompts, sampling_params)
