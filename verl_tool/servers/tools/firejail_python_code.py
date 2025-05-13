@@ -10,6 +10,7 @@ import os
 import signal
 import sys
 import json
+import uuid
 import hashlib
 from typing import Tuple, Dict, Any, Optional
 from ..utils import kill_python_subprocess_processes
@@ -114,7 +115,8 @@ def execute_python_in_firejail(code: str, timeout: int=TIMEOUT, stdin: Optional[
     if not os.path.exists(cwd):
         os.makedirs(cwd, exist_ok=True)
     # write code to a temp file
-    file_name = f"code_{hashlib.md5(code.encode()).hexdigest()}.py"
+    # file_name = f"code_{hashlib.md5(code.encode()).hexdigest()}.py"
+    file_name = f"code_{uuid.uuid4().hex}.py"
     file_path = os.path.join(cwd, file_name)
     with open(file_path, "w") as f:
         f.write(code)
@@ -160,7 +162,7 @@ class FirejailPythonCodeTool(BaseTool):
     enable_history_code_execution = False
     enable_mannual_reflection = False
     force_run_test_cases = False
-    done_without_error = False
+    done_without_error = True
     def get_usage_inst(self):
         return "You are able to write and execute Python code securely inside a Firejail sandbox."
     
