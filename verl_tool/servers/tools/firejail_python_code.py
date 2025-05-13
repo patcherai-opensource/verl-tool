@@ -52,7 +52,7 @@ def check_forbidden_imports(code: str) -> bool:
     
     return False
     
-def execute_python_in_firejail(code: str, timeout: int=TIMEOUT, stdin: Optional[str] = None) -> str:
+def execute_python_in_firejail(code: str, timeout: int=TIMEOUT, stdin: Optional[str] = None) -> Tuple[str, bool]:
     """
     Execute Python code in a Firejail sandbox with a timeout.
     
@@ -65,7 +65,7 @@ def execute_python_in_firejail(code: str, timeout: int=TIMEOUT, stdin: Optional[
     """
     # Check for forbidden imports first
     if check_forbidden_imports(code):
-        return "Execution blocked: Code contains potentially dangerous operations or imports."
+        return "Execution blocked: Code contains potentially dangerous operations or imports.", True
     
     # Create a minimal environment instead of copying everything
     original_env = os.environ.copy()
@@ -109,7 +109,8 @@ def execute_python_in_firejail(code: str, timeout: int=TIMEOUT, stdin: Optional[
         "--rlimit-as=1096m",
     ]
     # set cwd to be a temp dir
-    cwd = os.path.join(os.getcwd(), "/tmp/firejail")
+    # cwd = os.path.join(os.getcwd(), "/tmp/firejail")
+    cwd = "/tmp/firejail"
     if not os.path.exists(cwd):
         os.makedirs(cwd, exist_ok=True)
     # write code to a temp file
@@ -117,8 +118,9 @@ def execute_python_in_firejail(code: str, timeout: int=TIMEOUT, stdin: Optional[
     file_path = os.path.join(cwd, file_name)
     with open(file_path, "w") as f:
         f.write(code)
-    command.extend(["python3", "-c", code])
-    # command.extend(["python3", file_path])
+    # command.extend(["python3", "-c", code])
+    command.extend(["python3", file_path])
+    has_error = False
     try:
         # Execute the command
         result = subprocess.run(
@@ -134,18 +136,21 @@ def execute_python_in_firejail(code: str, timeout: int=TIMEOUT, stdin: Optional[
         
         stdout = result.stdout
         stderr = result.stderr.strip()
+        if stderr:
+            has_error = True
         
         result = f"{stdout}\nError:\n{stderr}" if stderr else stdout
         if result:
             result = result.strip()
     except subprocess.TimeoutExpired:
+        has_error = True
         result = f"Execution timed out after {timeout} seconds.\n"
     # Clean up the temporary file
     try:
         os.remove(file_path)
     except Exception as e:
         pass
-    return result
+    return result, has_error
 
 @register_tool
 class FirejailPythonCodeTool(BaseTool):
@@ -251,7 +256,7 @@ class FirejailPythonCodeTool(BaseTool):
                 # Execute the code
                 previous_parsed_code = [obs["action"] for obs in env["previous_obs"] if obs["is_valid"] and "error:" not in obs["observation"].lower()]
                 code_to_execute = "\n".join(previous_parsed_code) + "\n" + parsed_action
-                execution_result = execute_python_in_firejail(code_to_execute, self.timeout, stdin)
+                execution_result, has_error = execute_python_in_firejail(code_to_execute, self.timeout, stdin)
                 # print("------")
                 # print(code_to_execute)
                 # print("------")
@@ -266,7 +271,7 @@ class FirejailPythonCodeTool(BaseTool):
                         execution_result = execution_result.replace(previous_obs["observation"], "", 1)
             else:
                 code_to_execute = parsed_action
-                execution_result = execute_python_in_firejail(code_to_execute, self.timeout, stdin)
+                execution_result, has_error = execute_python_in_firejail(code_to_execute, self.timeout, stdin)
                 
             execution_result = execution_result.lstrip(' \n')
                         
@@ -299,7 +304,7 @@ class FirejailPythonCodeTool(BaseTool):
             else:
                 observation = "\n" + observation + "\n"
             
-            if self.force_run_test_cases and 'error:' not in execution_result.lower() and "execution timed out" not in execution_result.lower():
+            if self.force_run_test_cases and not has_error:
                 test_cases = extra_field.get("public_tests", None) if extra_field else None
                 if test_cases:
                     if isinstance(test_cases, str):
@@ -313,15 +318,15 @@ class FirejailPythonCodeTool(BaseTool):
                             test_result = ""
                         else:
                             test_codes = code_to_execute + "\n" + test_cases_code
-                            test_execution_result = execute_python_in_firejail(test_codes, self.timeout, stdin)
+                            test_execution_result, has_error = execute_python_in_firejail(test_codes, self.timeout, stdin)
                             test_execution_result = test_execution_result.replace(execution_result, "", 1)
                             test_result = f"Testing the above code with the following test cases:\n```python\n{test_cases_code}\n```\n\nTest result:\n```output\n{test_execution_result}\n```\n"
                             if not test_execution_result:
-                                test_result += "All public test cases passed!\n"
-                            elif 'error:' in test_execution_result.lower():
-                                test_result += "Some test cases did not pass, I will first think and then fix them with a new program and test again.\n"
+                                test_result += "\nAll public test cases passed!\n"
+                            elif has_error:
+                                test_result += "Some test cases did not pass, now think and then fix them with a new program and test again.\n"
                             else:
-                                test_result += "I'll check the test cases and see if they are correct.\n"
+                                test_result += "Now check the test cases and see if they are correct.\n"
                     elif isinstance(test_cases, dict):
                         assert "inputs" in test_cases and "outputs" in test_cases, f"Invalid test cases format: {test_cases.keys()}"
                         test_result = ""
@@ -331,7 +336,7 @@ class FirejailPythonCodeTool(BaseTool):
                             output_case = test_cases["outputs"][i]
                             test_codes = code_to_execute
                             test_stdin = (stdin + "\n" + input_case)
-                            test_execution_result = execute_python_in_firejail(test_codes, self.timeout, test_stdin)
+                            test_execution_result, has_error = execute_python_in_firejail(test_codes, self.timeout, test_stdin)
                             test_execution_result = test_execution_result.replace(execution_result, "", 1)
                             test_case_output_match = test_execution_result == output_case
                             if not test_case_output_match:
@@ -354,7 +359,7 @@ class FirejailPythonCodeTool(BaseTool):
                     idx = random.randint(0, len(heuristic_sentences["timeout"]) - 1)
                     observation += heuristic_sentences["timeout"][idx]
                 # case: execution ends with error, need to look back and fix the bug
-                elif "error:" in observation.lower():
+                elif has_error:
                     # observation = f"Execution completed with errors:\n{execution_result}"
                     idx = random.randint(0, len(heuristic_sentences["error"]) - 1)
                     observation += heuristic_sentences["error"][idx]     
@@ -365,7 +370,7 @@ class FirejailPythonCodeTool(BaseTool):
                     observation += heuristic_sentences["success"][idx]
 
             if self.done_without_error:
-                if "error:" in observation.lower() or "execution timed out" in observation.lower():
+                if has_error:
                     done = False
                 else:
                     done = True

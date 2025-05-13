@@ -128,8 +128,6 @@ class AgentActorManager:
             responses_str = [self.tokenizer.decode(responses[i][:effective_lens[i]], skip_special_tokens=False) for i in range(responses.shape[0])]
             for i in range(len(responses_str)):
                 if action_step >= self.config.min_action_num:
-                    if not responses_str[i].endswith(self.config.turn_end_token):
-                        responses_str[i] += self.config.turn_end_token
                     # always do action, decided by the server about whether an action stops
                     if self.action_stop_tokens:
                         if any([action_stop_token in responses_str[i] for action_stop_token in self.action_stop_tokens]):
@@ -138,6 +136,8 @@ class AgentActorManager:
                             for j in range(1, len(self.action_stop_tokens)):
                                 if self.action_stop_tokens[j] in responses_str[i]:
                                     responses_str[i] = responses_str[i].replace(self.action_stop_tokens[j], self.action_stop_tokens[0])
+                                if not responses_str[i].endswith(self.config.turn_end_token):
+                                    responses_str[i] += self.config.turn_end_token
                         else:
                             do_action = False
                     else:
@@ -221,6 +221,7 @@ class AgentActorManager:
     def _process_next_obs(self, next_obs: List[str], dones: List[bool], valid_action: List[bool], finishs: List[bool]) -> torch.Tensor:
         """Process next observations from environment."""
         mtrl_sep = self.config.mtrl_sep
+        next_obs = [obs if not done else "" for obs, done in zip(next_obs, dones)]
         if self.config.truncate_obs_side == 'left':
             next_obs_ids = self.tokenizer(
                 next_obs,
@@ -252,7 +253,7 @@ class AgentActorManager:
             )
             processed_next_obs = []
             for i in range(len(next_obs)):
-                if finishs[i]:
+                if finishs[i] or dones[i]:
                     # do action is false
                     assert next_obs[i] == "", f"next_obs should be empty when finishs is True, but got {next_obs[i]}"
                     processed_next_obs.append("")
@@ -716,9 +717,32 @@ class AgentActorManager:
         safe_payload = sanitize_request(batch_data)
         response = requests.post(self.config.tool_server_url, json=safe_payload)
         if response.status_code != 200:
-            print(f"Error: {response.status_code}, {response.text}")
-            raise ValueError(f"Error: {response.status_code}, {response.text}")
-        return response.json()
+            with open("error_data.json", 'w') as f:
+                json.dump(batch_data, f, indent=4)
+            try:
+                # Try to decode as utf-8 for error message
+                error_text = response.text
+                print(f"Error: {response.status_code}, {error_text}")
+            except UnicodeDecodeError:
+                # If decoding fails, show raw content and encoding
+                print(f"Error: {response.status_code}, Binary response, encoding: {response.encoding}")
+                print(f"Raw content (first 100 bytes): {response.content[:100]}")
+            raise ValueError(f"Error: {response.status_code}, Response could not be decoded as UTF-8")
+        
+        try:
+            return response.json()
+        except ValueError as e:
+            print(f"Failed to parse JSON: {e}")
+            print(f"Response content type: {response.headers.get('Content-Type')}")
+            print(f"First 100 chars of response: {response.text[:100]}")
+            raise
+        
+        # if response.status_code != 200:
+        #     print(f"Error: {response.status_code}, {response.text}")
+        #     with open("error_data.json", 'w') as f:
+        #         json.dump(batch_data, f, indent=4)
+        #     raise ValueError(f"Error: {response.status_code}, {response.text}")
+        # return response.json()
 
     def interact_with_tool_server(
         self,

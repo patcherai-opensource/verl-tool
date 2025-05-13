@@ -109,7 +109,7 @@ class AceCoderRewardManager:
         self.add_format_answer_penalty = False # -0.5 if not having <answer> </answer>
         self.add_valid_action_penalty = True # -0.25 if num turns > 0 not action not valid
         self.add_unfinished_traj_penalty = True # -0.25 if the traj is not finished
-        self.add_no_tool_interact_penalty = True # -0.25 if the traj's num turn is 0, no interaction at all
+        self.add_no_tool_interact_penalty = False # -0.25 if the traj's num turn is 0, no interaction at all
         self.add_code_exec_penalty = False # -0.25 if the execution has an error.
         
         try:
@@ -374,10 +374,8 @@ class AceCoderRewardManager:
                 {
                     "id": data[i].non_tensor_batch['extra_info']['id'] if 'id' in data[i].non_tensor_batch['extra_info'] else None,
                     "data_source": data[i].non_tensor_batch['data_source'],
-                    "prompt": prompt_str[i],
-                    "response": response_str[i],
-                    "prompt_full": self.tokenizer.decode(prompt_ids[i][-valid_prompt_length[i].item():], skip_special_tokens=False),
-                    "response_full": self.tokenizer.decode(response_ids[i][:valid_response_length[i].item()], skip_special_tokens=False),
+                    "prompt": self.tokenizer.decode(prompt_ids[i][-valid_prompt_length[i].item():], skip_special_tokens=False),
+                    "response": self.tokenizer.decode(response_ids[i][:valid_response_length[i].item()], skip_special_tokens=False),
                     "extracted_code": extracted_answers[i],
                     "ground_truth": "",
                     "score": scores[i],

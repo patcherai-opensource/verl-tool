@@ -69,13 +69,13 @@ uv pip install -r requirements.txt
 ### Eval
 ```bash
 export OPENAI_API_KEY="{KEY}" # https://platform.deepseek.com/api_keys
-evalplus.evaluate --model "VerlTool/acecoder-fsdp-qwen_qwen2.5-coder-1.5b-grpo-n16-b128-t1.0-lr1e-6-69k-sys3-250-step"              \
+evalplus.evaluate --model "VerlTool/acecoder-fsdp_agent-qwen_qwen2.5-coder-1.5b-grpo-n16-b128-t1.0-lr1e-6-69k-mtrl-sys8-110-step"              \
                   --dataset humaneval           \
                   --base-url http://0.0.0.0:5000  \
                   --backend openai --greedy
 
 export OPENAI_API_KEY="{KEY}" # https://platform.deepseek.com/api_keys
-evalplus.evaluate --model "VerlTool/acecoder-fsdp-qwen_qwen2.5-coder-1.5b-grpo-n16-b128-t1.0-lr1e-6-69k-sys3-250-step"              \
+evalplus.evaluate --model "VerlTool/acecoder-fsdp_agent-qwen_qwen2.5-coder-1.5b-grpo-n16-b128-t1.0-lr1e-6-69k-mtrl-sys8-110-step"              \
                   --dataset mbpp           \
                   --base-url http://0.0.0.0:5000  \
                   --backend openai --greedy

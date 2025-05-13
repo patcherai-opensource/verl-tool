@@ -111,32 +111,52 @@ class ModelService:
         """Process observations using the tokenizer with proper async locks"""
         async with self.encode_lock:
             mtrl_sep = self.tool_config.mtrl_sep
+            if self.tool_config.truncate_obs_side == 'left':
+                next_obs_ids = self.tokenizer(
+                    next_obs,
+                    padding='longest',
+                    return_tensors='pt',
+                    add_special_tokens=False,  # Prevents adding special tokens
+                    padding_side='left',
+                )['input_ids'].to(torch.int64)
+                if next_obs_ids.shape[1] > self.tool_config.max_obs_length:
+                    print(f"[WARNING] OBSERVATION TOO LONG, CONSIDER CHANGING YOUR CONFIG, {next_obs_ids.shape[1]} & {self.tool_config.max_obs_length}")
+                    next_obs_ids = next_obs_ids[:, -self.tool_config.max_obs_length:]
+            elif self.tool_config.truncate_obs_side == 'right':
+                next_obs_ids = self.tokenizer(
+                    next_obs,
+                    padding='longest',
+                    return_tensors='pt',
+                    add_special_tokens=False,  # Prevents adding special tokens
+                    padding_side='right',
+                )['input_ids'].to(torch.int64)
+                if next_obs_ids.shape[1] > self.tool_config.max_obs_length:
+                    print(f"[WARNING] OBSERVATION TOO LONG, CONSIDER CHANGING YOUR CONFIG, {next_obs_ids.shape[1]} & {self.tool_config.max_obs_length}")
+                    next_obs_ids = next_obs_ids[:, :self.tool_config.max_obs_length]
+            else:
+                raise ValueError(f"Invalid truncate_obs_side: {self.tool_config.truncate_obs_side}")
             if self.tool_config.enable_mtrl:
+                next_obs = self.tokenizer.batch_decode(
+                    next_obs_ids,
+                    skip_special_tokens=True
+                )
                 processed_next_obs = []
                 for i in range(len(next_obs)):
-                    if valid_action[i]:
+                    if finishs[i]:
+                        # do action is false
+                        assert next_obs[i] == "", f"next_obs should be empty when finishs is True, but got {next_obs[i]}"
+                        processed_next_obs.append("")
+                    elif valid_action[i]:
                         processed_next_obs.append(mtrl_sep.format(obs=next_obs[i]))
-                        # processed_next_obs.append(mtrl_sep.format(obs=next_obs[i]) if not next_obs[i].strip(' \n') else next_obs[i])
                     else:
-                        processed_next_obs.append(mtrl_sep.format(obs="Your action is not valid, please check the format and try again." + next_obs[i]) if not next_obs[i].strip(' \n') else next_obs[i])
+                        processed_next_obs.append(mtrl_sep.format(obs="Your action is not valid, please check the format and try again." + next_obs[i]))
                 next_obs = processed_next_obs
-            next_obs_ids = self.tokenizer(
-                observations,
-                padding='longest',
-                return_tensors='pt',
-                add_special_tokens=False,  # Prevents adding special tokens
-            )['input_ids'].to(torch.int64)
-
-            if isinstance(self.tool_config.max_obs_length, int) and next_obs_ids.shape[1] > self.tool_config.max_obs_length:
-                print(f"[WARNING] OBSERVATION TOO LONG, CONSIDER CHANGING YOUR CONFIG, {next_obs_ids.shape[1]} & {self.tool_config.max_obs_length}")            
-                if self.tool_config.truncate_obs_side == 'left':
-                    next_obs_ids = next_obs_ids[:, -self.tool_config.max_obs_length:]
-                elif self.tool_config.truncate_obs_side == 'right':
-                    next_obs_ids = next_obs_ids[:, :self.tool_config.max_obs_length]
-                else:
-                    raise ValueError(f"Invalid truncate_obs_side: {self.tool_config.truncate_obs_side}")
-            
-            # Convert to list of strings
+                next_obs_ids = self.tokenizer(
+                    next_obs,
+                    padding='longest',
+                    return_tensors='pt',
+                    add_special_tokens=False,  # Prevents adding special tokens
+                )['input_ids'].to(torch.int64)
             next_obs = self.tokenizer.batch_decode(
                 next_obs_ids,
                 skip_special_tokens=True,
@@ -151,14 +171,19 @@ class ModelService:
         finishes = []
         for i in range(len(active_responses)):
             finish = True
-            if active_finish_reasons[i] == "stop" and outputs.choices[i].stop_reason is not None or \
-                self.tool_config.min_action_num >= action_step:
-                active_responses[i] = active_responses[i] # + outputs.choices[i].stop_reason
+            if active_finish_reasons[i] == "stop" and outputs.choices[i].stop_reason is not None:
+                active_responses[i] = active_responses[i] + outputs.choices[i].stop_reason
                 if self.tool_config.enable_mtrl:
                     active_responses[i] += self.tool_config.turn_end_token
                 finish = False
+            if finish and self.tool_config.min_action_num < action_step:
+                finish = True
+                if self.tool_config.enable_mtrl:
+                    if self.tool_config.action_stop_tokens is not None:
+                        # add action stop tokens
+                        active_responses[i] += self.tool_config.action_stop_tokens[0]
+                    active_responses[i] += self.tool_config.turn_end_token
             finishes.append(finish)
-            
         return active_responses, finishes, active_finish_reasons
         
     def load_model(self):
@@ -212,7 +237,7 @@ class ModelService:
                     # print(f"vLLM instance model-{j} at {host}:{ports[j]} is not ready yet: {str(e)}")
                     continue
             if all(vllm_model_status):
-                print(f"vLLM service started successfully with model: {self.model_config.model}")
+                print(f"✅ vLLM service started successfully with model: {self.model_config.model}")
                 return     
             else:
                 time.sleep(retry_interval)
@@ -311,10 +336,16 @@ class ModelService:
                     finishes
                 )
                 
-            observations = await self.post_process_observations(tool_responses["observations"])
+            observations = await self.post_process_observations(tool_responses["observations"], tool_responses["dones"], tool_responses["valids"], finishes)
             dones = tool_responses["dones"]
             valids = tool_responses["valids"]
             
+            # print(f"Active step: {action_step}")
+            # print(f"Active responses: {active_responses}")
+            # print(f"Active observations: {observations}")
+            # print(f"Active dones: {dones}")
+            # print(f"Active traj_ids: {active_traj_ids}")
+            # print(f"Active finish_reasons: {active_finish_reasons}")
             active_idx = 0
             for i in range(len(contexts)):
                 if active_masks[i]:
@@ -356,6 +387,7 @@ class ModelService:
             "stop": list(set(body.get("stop", []) + self.tool_config.action_stop_tokens + ["``` ``` ``` ```"])),
         }
 
+        # print(f"Sampling params: {sampling_params}")
         all_responses, finish_reasons = await self.generate_with_tools(prompts, sampling_params)
         
         async with self.encode_lock:

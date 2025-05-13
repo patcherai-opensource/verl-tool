@@ -185,10 +185,8 @@ class ToRLRewardManager:
             to_save_records.append({
                 'id': data_item.non_tensor_batch['extra_info']['id'] if 'id' in data_item.non_tensor_batch['extra_info'] else None,
                 'data_source': data_source,
-                'prompt': prompt_str,
-                'response': response_str,
-                "prompt_full": self.tokenizer.decode(prompt_ids[-valid_prompt_length:], skip_special_tokens=False),
-                "response_full": self.tokenizer.decode(response_ids[:valid_response_length], skip_special_tokens=False),
+                "prompt": self.tokenizer.decode(prompt_ids[-valid_prompt_length:], skip_special_tokens=False),
+                "response": self.tokenizer.decode(response_ids[:valid_response_length], skip_special_tokens=False),
                 'ground_truth': ground_truth,
                 'score': score,
                 'reward': reward,
