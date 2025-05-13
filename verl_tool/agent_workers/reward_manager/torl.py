@@ -33,7 +33,7 @@ class ToRLRewardManager:
         self.compute_score = compute_score if compute_score else _default_compute_score
         self.torl_compute_score = torl_compute_score
         self.reward_fn_key = reward_fn_key
-        self.step = 0
+        self.step = None
         self.add_format_think_penalty = False # -0.5 if not begines with <think> and end with </think>
         self.add_format_answer_penalty = False # -0.5 if not having <answer> </answer>
         self.add_valid_action_penalty = True # -0.25 if num turns > 0 not action not valid
@@ -101,7 +101,25 @@ class ToRLRewardManager:
             else:
                 self.record_dir = Path(__file__).parent.parent.parent.parent / "verl_step_records" / f"torl-{time.strftime('%Y-%m-%d-%H-%M-%S')}"
                 self.record_dir.mkdir(parents=True, exist_ok=True)
-                
+        
+        # check the last step index
+        if self.step is None:
+            last_step_idx = 0
+            for file in os.listdir(self.record_dir):
+                if self.num_examine == 1:
+                    if re.search(r"step-val-\d+\.json", file):
+                        step_idx = int(file[:-len(".json")].split("-")[-1])
+                        if step_idx > last_step_idx:
+                            last_step_idx = step_idx
+                else:
+                    if re.search(r"step-\d+\.json", file):
+                        step_idx = int(file[:-len(".json")].split("-")[-1])
+                        if step_idx > last_step_idx:
+                            last_step_idx = step_idx
+            self.step = last_step_idx + 1
+        if data.meta_info.get('global_step', None) is not None:
+            self.step = data.meta_info['global_step']
+
         # If there is rm score, we directly return rm score. Otherwise, we compute via rm_score_fn
         if 'rm_scores' in data.batch.keys():
             if return_dict:
@@ -205,6 +223,7 @@ class ToRLRewardManager:
             self.step += 1
             with open(temp_file, "w") as f:
                 json.dump(to_save_records, f, indent=4)
+            print(f"Saved records to {temp_file}")
         
         if return_dict:
             return {

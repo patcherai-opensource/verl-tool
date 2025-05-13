@@ -78,9 +78,26 @@ def parse_code(action: str, mode="all"):
     elif mode == "last":
         # Use the last code block found
         parsed_code = all_valid_python_code[-1]
+    elif mode == "all_in_last_turn":
+        # parse all the code blocks only in the last assistant turn
+        # find the last assistant turn
+        start_idx = action.rfind("<|im_start|>assistant")
+        if start_idx == -1:
+            start_idx = 0
+        end_idx = action.find("<|im_end|>", start_idx)
+        if end_idx == -1:
+            end_idx = len(action)
+        last_turn = action[start_idx:end_idx]
+        all_valid_python_code = re.findall(r"<python>(.*?)</python>", last_turn, re.DOTALL)
+        if not all_valid_python_code:
+            all_valid_python_code = re.findall(r"```python(.*?)```", last_turn, re.DOTALL)
+        if len(all_valid_python_code) == 0:
+            return ""
+        parsed_code = "\n".join([code for code in all_valid_python_code if check_syntax(code)])
     else:
-        raise ValueError(f"Invalid mode: {mode}. Use 'all', 'first', or 'last'.")
-    passed_code = parsed_code.strip(' \n')
+        raise ValueError(f"Invalid mode: {mode}. Use 'all', 'first', 'last', or 'all_in_last_turn'.")
+    
+    parsed_code = parsed_code.strip(' \n')
     return parsed_code
 
 def prime_code_compute_score_async(data_source, solution_str, ground_truth, extra_info=None):
@@ -101,10 +118,10 @@ class AceCoderRewardManager:
         self.tokenizer = tokenizer
         self.num_examine = num_examine  # the number of batches of decoded responses to print to the console
         self.compute_score = compute_score or _default_compute_score
-        self.step_idx = 0
+        self.step_idx = None
         self.n_workers = 64
         self.binary = True
-        self.parse_code_mode = "last" # "all", "first", "last"
+        self.parse_code_mode = "all_in_last_turn" # "all", "first", "last"
         self.add_format_think_penalty = False # -0.5 if not begines with <think> and end with </think>
         self.add_format_answer_penalty = False # -0.5 if not having <answer> </answer>
         self.add_valid_action_penalty = True # -0.25 if num turns > 0 not action not valid
@@ -257,6 +274,24 @@ class AceCoderRewardManager:
             else:
                 self.record_dir = Path(__file__).parent.parent.parent.parent / "verl_step_records" / f"acecoder-{time.strftime('%Y-%m-%d-%H-%M-%S')}"
                 self.record_dir.mkdir(parents=True, exist_ok=True)
+        
+        # check the last step index
+        if self.step_idx is None:
+            last_step_idx = 0
+            for file in os.listdir(self.record_dir):
+                if self.num_examine == 1:
+                    if re.search(r"step-val-\d+\.json", file):
+                        step_idx = int(file[:-len(".json")].split("-")[-1])
+                        if step_idx > last_step_idx:
+                            last_step_idx = step_idx
+                else:
+                    if re.search(r"step-\d+\.json", file):
+                        step_idx = int(file[:-len(".json")].split("-")[-1])
+                        if step_idx > last_step_idx:
+                            last_step_idx = step_idx
+            self.step_idx = last_step_idx + 1
+        if data.meta_info.get('global_step', None) is not None:
+            self.step_idx = data.meta_info['global_step']
                 
         # If there is rm score, we directly return rm score. Otherwise, we compute via rm_score_fn
         if 'rm_scores' in data.batch.keys():
@@ -296,8 +331,10 @@ class AceCoderRewardManager:
         #     }, f, indent=4)
             
         # batch decode the list of responses and prompts
-        response_str = self.tokenizer.batch_decode(response_ids, skip_special_tokens=True)
-        prompt_str = self.tokenizer.batch_decode(prompt_ids, skip_special_tokens=True)
+        response_str = [self.tokenizer.decode(response_ids[i][:valid_response_length[i].item()], skip_special_tokens=False) for i in range(len(data))]
+        prompt_str = [self.tokenizer.decode(prompt_ids[i][-valid_prompt_length[i].item():], skip_special_tokens=False) for i in range(len(data))]
+        # response_str = self.tokenizer.batch_decode(response_ids, skip_special_tokens=True)
+        # prompt_str = self.tokenizer.batch_decode(prompt_ids, skip_special_tokens=True)
         
         # extract the answer for the list of responses
         extracted_answers = [re.sub(r"<think>(.|\n)*?</think>", "", response) for response in response_str]
@@ -374,8 +411,8 @@ class AceCoderRewardManager:
                 {
                     "id": data[i].non_tensor_batch['extra_info']['id'] if 'id' in data[i].non_tensor_batch['extra_info'] else None,
                     "data_source": data[i].non_tensor_batch['data_source'],
-                    "prompt": self.tokenizer.decode(prompt_ids[i][-valid_prompt_length[i].item():], skip_special_tokens=False),
-                    "response": self.tokenizer.decode(response_ids[i][:valid_response_length[i].item()], skip_special_tokens=False),
+                    "prompt": prompt_str[i],
+                    "response": response_str[i],
                     "extracted_code": extracted_answers[i],
                     "ground_truth": "",
                     "score": scores[i],

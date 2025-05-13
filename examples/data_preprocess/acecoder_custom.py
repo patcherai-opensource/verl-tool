@@ -80,9 +80,12 @@ def main(
     local_dir: str = 'data/acecoder',
     system_prompt_idx: int = 1,
     add_public_tests: bool = False,
+    add_public_tests_all: bool = False,
 ):
     local_dir = Path(local_dir)
     local_dir_post_fix = f"-system-prompt-{system_prompt_idx}"
+    if add_public_tests_all:
+        local_dir_post_fix += f"-all-tests"
     local_dir = local_dir / (dataset_path.split('/')[-1] + local_dir_post_fix)
     local_dir.mkdir(parents=True, exist_ok=True)
     
@@ -100,8 +103,15 @@ def main(
 
         def process_fn(example, idx):
             question_raw = example.pop('question')
-
+            
             tests = example.pop('tests')
+            
+            if add_public_tests:
+                public_tests = example.get('public_tests', None)
+            elif add_public_tests_all:
+                public_tests = tests
+            else:
+                public_tests = None
             data = {
                 "data_source": dataset_path,
                 "prompt": [
@@ -124,7 +134,7 @@ def main(
                     'index': idx,
                     'id': str(example['id']),
                     "question": question_raw,
-                    "public_tests": example.get('public_tests', None) if add_public_tests else None,
+                    "public_tests": public_tests,
                     "test_cases": tests,
                     "inputs_outputs": None,
                 }
@@ -161,6 +171,7 @@ python examples/data_preprocess/acecoder_custom.py --dataset_path VerlTool/AceCo
 python examples/data_preprocess/acecoder_custom.py --dataset_path VerlTool/AceCoderV2-69K --local_dir data/acecoder_custom --system_prompt_idx 9
 python examples/data_preprocess/acecoder_custom.py --dataset_path VerlTool/AceCoderV2-69K --local_dir data/acecoder_custom --system_prompt_idx 10
 python examples/data_preprocess/acecoder_custom.py --dataset_path VerlTool/AceCoderV2-69K --local_dir data/acecoder_custom --system_prompt_idx 11 --add_public_tests True
+python examples/data_preprocess/acecoder_custom.py --dataset_path VerlTool/AceCoderV2-69K --local_dir data/acecoder_custom --system_prompt_idx 11 --add_public_tests_all True
 python examples/data_preprocess/acecoder_custom.py --dataset_path VerlTool/AceCoderV2-122K --local_dir data/acecoder_custom --system_prompt_idx 1
 python examples/data_preprocess/acecoder_custom.py --dataset_path VerlTool/AceCoderV2-122K --local_dir data/acecoder_custom --system_prompt_idx 2
 """

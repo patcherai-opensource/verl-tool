@@ -202,6 +202,7 @@ class AgentRayPPOTrainer(RayPPOTrainer):
             test_batch = test_batch.union(test_output_gen_batch)
 
             # evaluate using reward_function
+            test_batch.meta_info["global_step"] = self.global_steps
             result = self.val_reward_fn(test_batch, return_dict=True)
             reward_tensor = result["reward_tensor"]
             scores = reward_tensor.sum(-1).cpu().tolist()
@@ -379,6 +380,7 @@ class AgentRayPPOTrainer(RayPPOTrainer):
                             reward_tensor = self.rm_wg.compute_rm_score(batch)
                             batch = batch.union(reward_tensor)
 
+                        batch.meta_info['global_step'] = self.global_steps
                         # we combine with rule-based rm
                         reward_extra_infos_dict: dict[str, list]
                         try:
