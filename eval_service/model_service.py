@@ -474,23 +474,18 @@ class ModelService:
 
 def clean_excessive_backticks(text):
     """
-    清理模型输出中的过多反引号，处理两种情况：
-    1. 连续多个反引号（如 ````````）
-    2. 多组三个反引号（如 ``` ``` ``` ```）
-    
-    保留合法的Markdown代码块格式
+    remove excessive backtick groups from the text.
     """
     import re
     
-    # 步骤2：清理连续的反引号
     def clean_backticks(text):
-        # 将连续4个及以上的反引号替换为3个
+        # case: remove continuous backticks
         text = re.sub(r"`{4,}", "```", text)
-        # 将多组三个反引号（被空格或换行符隔开）替换为单个三个反引号
+        # case: remove excessive backtick groups
         text = re.sub(r"```([\s\n]+```)+", "```", text)
         return text
     
-    # 执行清理流程
+    # Clean the text using the clean_backticks function
     cleaned_text = clean_backticks(text)
     
     return cleaned_text
