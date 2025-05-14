@@ -189,6 +189,8 @@ algorithm:
     enable: true  # false: use original dynamic_filter; otherwise use dapo filter
     metric: seq_reward
     max_num_gen_batches: 5 # Non-positive values mean no upper limit
+    allow_fallback: true # whether to fallback to original dynamic_filter
+    fallback_policy: keep_all  # random_sample / TBA
   gamma: 1.0
   lam: 1.0
   adv_estimator: gae

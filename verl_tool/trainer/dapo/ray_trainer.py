@@ -34,9 +34,9 @@ from .metric_utils import (
 
 # DAPO used training metrics
 from verl.trainer.ppo.metric_utils import (
-    compute_data_metrics,
+    # compute_data_metrics,
+    # compute_timing_metrics,
     compute_throughout_metrics,
-    compute_timing_metrics,
     reduce_metrics,
 )
 
@@ -313,9 +313,6 @@ class AgentRayDAPOTrainer(RayPPOTrainer):
         self.global_steps += 1
         last_val_metrics = None
 
-        # DAPO specific metrics preventing over-sampling
-        num_prompt_in_batch = 0
-
         for epoch in range(self.config.trainer.total_epochs):
             for batch_dict in self.train_dataloader:
                 print(f'epoch {epoch}, step {self.global_steps}')
@@ -371,13 +368,68 @@ class AgentRayDAPOTrainer(RayPPOTrainer):
                     batch = batch.repeat(repeat_times=self.config.actor_rollout_ref.rollout.n, interleave=True)
                     batch = batch.union(gen_batch_output)
                     
+                    # TODO: DAPO: need to compute scores FIRST
+                    with _timer('reward', timing_raw):
+                        # compute scores. Support both model and function-based.
+                        # We first compute the scores using reward model. Then, we call reward_fn to combine
+                        # the results from reward model and rule-based results.
+                        if self.use_rm:
+                            # we first compute reward model score
+                            reward_tensor = self.rm_wg.compute_rm_score(batch)
+                            batch = batch.union(reward_tensor)
+
+                        batch.meta_info['global_step'] = self.global_steps
+                        # we combine with rule-based rm
+                        reward_extra_infos_dict: dict[str, list]
+                        try:
+                            reward_result = self.reward_fn(batch, return_dict=True)
+                            reward_tensor = reward_result['reward_tensor']
+                            reward_extra_infos_dict = reward_result['reward_extra_info']
+                            # update metrics of reward extra info
+                            to_remove_keys = []
+                            for k, v in reward_extra_infos_dict.items():
+                                mean_v = np.mean([x for x in v if x is not None])
+                                metrics[f'reward_extra_info/{k}'] = mean_v
+                                if None in v:
+                                    to_remove_keys.append(k)
+                            for k in to_remove_keys:
+                                reward_extra_infos_dict.pop(k)
+                        except Exception as e:
+                            print(f'Error in reward_fn: {e}')
+                            reward_tensor = self.reward_fn(batch)
+                            reward_extra_infos_dict = {}
+
+                        batch.batch['token_level_scores'] = reward_tensor
+
+                        print(f'{list(reward_extra_infos_dict.keys())=}')
+                        if reward_extra_infos_dict:
+                            batch.non_tensor_batch.update({k: np.array(v) for k, v in reward_extra_infos_dict.items()})
+
+                        # compute rewards. apply_kl_penalty if available
+                        if self.config.algorithm.use_kl_in_reward:
+                            batch, kl_metrics = apply_kl_penalty(batch,
+                                                                 kl_ctrl=self.kl_ctrl_in_reward,
+                                                                 kl_penalty=self.config.algorithm.kl_penalty)
+                            metrics.update(kl_metrics)
+                        else:
+                            batch.batch['token_level_rewards'] = batch.batch['token_level_scores']
+
+                    if "info_mask" in batch.batch.keys():
+                        # masking observations, instead of directly using original `attention_mask`
+                        ori_attention_mask = batch.batch['attention_mask']
+                        batch.batch['attention_mask'] = batch.batch['info_mask']
+                    
                     if self.config.algorithm.get("filter_groups", {}).get("enable", False):
+                        
+                        allow_fallback = self.config.algorithm.filter_groups.get("allow_fallback", False)
+                        fallback_policy = self.config.algorithm.filter_groups.get("fallback_policy", "keep_all")
+                        
                         # use DAPO filter groups
-                        metric_name = self.config.algorithm.filter_groups.metric_name
+                        metric_name = self.config.algorithm.filter_groups.metric
                         
                         # write the metrics to non_tensor_batch
                         if metric_name == "seq_final_reward":
-                            batch.non_tensor_batch["seq_final_reward"] = batch.batch["token_level_scores"].sum(dim=-1).numpy()
+                            batch.non_tensor_batch["seq_final_reward"] = batch.batch["token_level_rewards"].sum(dim=-1).numpy()
                         elif metric_name == "seq_reward":
                             batch.non_tensor_batch["seq_reward"] = batch.batch["token_level_scores"].sum(dim=-1).numpy()
                     
@@ -390,7 +442,6 @@ class AgentRayDAPOTrainer(RayPPOTrainer):
                         # keep the prompt generations which has std > 0 or only one generation (sample=1)
 
                         kept_prompt_uids = [uid for uid, std in prompt_uid2metric_std.items() if std > 0 or len(prompt_uid2metric_vals[uid]) == 1]
-                        num_prompt_in_batch += len(kept_prompt_uids)
                         kept_traj_idxs = [idx for idx, uid in enumerate(batch.non_tensor_batch["uid"]) if uid in kept_prompt_uids]
                         
                         # filter once then accumulate the kept prompt generations to batch_pool
@@ -406,7 +457,7 @@ class AgentRayDAPOTrainer(RayPPOTrainer):
                         self._num_gen_batches += 1
                     
                         prompt_bsz = self.config.data.train_batch_size
-                        max_gen = self.config.algorithm.filter_groups.max_num_gen_batches
+                        max_gen = self.config.algorithm.filter_groups.get("max_num_gen_batches", 0)
 
                         # case: if the number of generations in batch_pool does exceed the required prompt generation batch size
                         if self._num_prompt_generations_in_pool < prompt_bsz:
@@ -416,8 +467,23 @@ class AgentRayDAPOTrainer(RayPPOTrainer):
                                 continue
                             else:
                                 # fall back and use current pool
-                                print("[DAPO WARNING] filter_groups exceeded max_num_gen_batches. using current pool without std filter")
-                        
+                                if allow_fallback:
+                                    if fallback_policy == "keep_all":
+                                        print("[DAPO WARNING] filter_groups exceeded max_num_gen_batches. using current pool without std filter")
+                                        batch = self._batch_pool
+                                        # failsafe: clear the batch pool, let the subsequent batches to be generated
+                                    # TODO: can implement random_sample, reduce_rollout, etc.
+                                    else: 
+                                        raise ValueError(f"[DAPO ERROR] Other fallback_policy not implemented")
+                                    
+                                    # TODO: this place might be problematic: unable to break?                                    
+                                    self._batch_pool = None
+                                    self._num_prompt_generations_in_pool = 0
+                                    self._num_gen_batches = 0
+                                    continue
+                                else:
+                                    raise ValueError("No enough prompt generations in batch_pool. Training stopped.")
+
                         # case: if the number of generations in batch_pool does exceed the required prompt generation batch size
                         # trim the total generated prompt outputs to the fixed size: prompt_bsz * rollout.n
                         traj_bsz = self.config.actor_rollout_ref.rollout.n * prompt_bsz
@@ -429,7 +495,7 @@ class AgentRayDAPOTrainer(RayPPOTrainer):
                         self._num_gen_batches = 0
 
                     # otherwise use original one-time dynamic filter logic
-                    elif getattr(self.config.trainer, 'filter_groups', False):
+                    elif getattr(self.config.trainer, 'dynamic_filter', False):
                         batch = self.dynamic_filter(batch, metrics)
 
                     # then compute the response mask for masking
@@ -475,64 +541,21 @@ class AgentRayDAPOTrainer(RayPPOTrainer):
                             values = self.critic_wg.compute_values(batch)
                             batch = batch.union(values)
 
+                    # NEED TO MOVE REWARD COMPUTATION BEFORE FILTER GROUPS                        
+                    
                     with _timer('adv', timing_raw):
-                        # compute scores. Support both model and function-based.
-                        # We first compute the scores using reward model. Then, we call reward_fn to combine
-                        # the results from reward model and rule-based results.
-                        if self.use_rm:
-                            # we first compute reward model score
-                            reward_tensor = self.rm_wg.compute_rm_score(batch)
-                            batch = batch.union(reward_tensor)
-
-                        batch.meta_info['global_step'] = self.global_steps
-                        # we combine with rule-based rm
-                        reward_extra_infos_dict: dict[str, list]
-                        try:
-                            reward_result = self.reward_fn(batch, return_dict=True)
-                            reward_tensor = reward_result['reward_tensor']
-                            reward_extra_infos_dict = reward_result['reward_extra_info']
-                            # update metrics of reward extra info
-                            to_remove_keys = []
-                            for k, v in reward_extra_infos_dict.items():
-                                mean_v = np.mean([x for x in v if x is not None])
-                                metrics[f'reward_extra_info/{k}'] = mean_v
-                                if None in v:
-                                    to_remove_keys.append(k)
-                            for k in to_remove_keys:
-                                reward_extra_infos_dict.pop(k)
-                        except Exception as e:
-                            print(f'Error in reward_fn: {e}')
-                            reward_tensor = self.reward_fn(batch)
-                            reward_extra_infos_dict = {}
-
-                        batch.batch['token_level_scores'] = reward_tensor
-
-                        print(f'{list(reward_extra_infos_dict.keys())=}')
-                        if reward_extra_infos_dict:
-                            batch.non_tensor_batch.update({k: np.array(v) for k, v in reward_extra_infos_dict.items()})
-
-                        # compute rewards. apply_kl_penalty if available
-                        if self.config.algorithm.use_kl_in_reward:
-                            batch, kl_metrics = apply_kl_penalty(batch,
-                                                                 kl_ctrl=self.kl_ctrl_in_reward,
-                                                                 kl_penalty=self.config.algorithm.kl_penalty)
-                            metrics.update(kl_metrics)
-                        else:
-                            batch.batch['token_level_rewards'] = batch.batch['token_level_scores']
-
+                        # TODO: not sure if the advantage needs to be computed here
                         # compute advantages, executed on the driver process
-                        batch = compute_advantage(batch,
-                                                  adv_estimator=self.config.algorithm.adv_estimator,
-                                                  gamma=self.config.algorithm.gamma,
-                                                  lam=self.config.algorithm.lam,
-                                                  num_repeat=self.config.actor_rollout_ref.rollout.n)
-
-                    if "info_mask" in batch.batch.keys():
-                        # masking observations, instead of directly using original `attention_mask`
-                        ori_attention_mask = batch.batch['attention_mask']
-                        batch.batch['attention_mask'] = batch.batch['info_mask']
-                        
-                        
+                        # norm_adv_by_std_in_grpo = self.config.algorithm.get("norm_adv_by_std_in_grpo", True)
+                        batch = compute_advantage(
+                            batch,
+                            adv_estimator=self.config.algorithm.adv_estimator,
+                            gamma=self.config.algorithm.gamma,
+                            lam=self.config.algorithm.lam,
+                            num_repeat=self.config.actor_rollout_ref.rollout.n
+                            # norm_adv_by_std_in_grpo=norm_adv_by_std_in_grpo,
+                        )
+                    
                     # update critic
                     if self.use_critic:
                         with _timer('update_critic', timing_raw):
@@ -573,8 +596,6 @@ class AgentRayDAPOTrainer(RayPPOTrainer):
                 # TODO: implement actual tflpo and theoretical tflpo
                 n_gpus = self.resource_pool_manager.get_n_gpus()
                 metrics.update(compute_throughout_metrics(batch=batch, timing_raw=timing_raw, n_gpus=n_gpus))
-
-                num_prompt_in_batch = 0
 
                 # TODO: make a canonical logger that supports various backend
                 logger.log(data=metrics, step=self.global_steps)
