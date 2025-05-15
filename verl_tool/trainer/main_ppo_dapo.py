@@ -51,7 +51,7 @@ def get_custom_reward_fn(config):
     return getattr(module, function_name)
 
 
-@hydra.main(config_path='config', config_name='ppo_trainer', version_base=None)
+@hydra.main(config_path='config', config_name='dapo_trainer', version_base=None)
 def main(config):
     # TODO(linjunrong.ocss884): this ENV is left for resolving SGLang conflict with ray devices
     # isolation, will solve in the future
