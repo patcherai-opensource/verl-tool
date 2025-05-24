@@ -5,7 +5,7 @@ math_problem = """Every morning Aya goes for a $9$-kilometer-long walk and stops
 """
 
 from openai import OpenAI
-client = OpenAI(api_key="sk-proj-1234567890", base_url="http://0.0.0.0:5000") # Replace with your local server address
+client = OpenAI(api_key="sk-proj-1234567890", base_url="http://0.0.0.0:5001") # Replace with your local server address
 
 completion = client.chat.completions.create(
     model="GAIR/ToRL-1.5B",

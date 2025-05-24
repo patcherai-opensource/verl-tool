@@ -209,70 +209,69 @@ class ModelService:
         )
         return response
     
-    def generate_with_tools(self, messages_list: List[List[Dict[str, str]]], sampling_params: dict, extra_fields=None) -> Tuple[List[str], List[str]]:
+    def generate_with_tools(self, prompts: List[str], sampling_params: dict, extra_fields=None) -> Tuple[List[str], List[str]]:
         """
         Generate text with tool calls in a multi-turn loop.
         Args:
-            messages_list: List of message lists（每个样本一组messages，初始为body['messages']）
+            prompts: Initial prompts for generation
             sampling_params: Sampling parameters for the model
             extra_fields: 额外传递给tool server的内容（如有）
         Returns:
             Tuple of (full_responses, finish_reasons)
         """
         assert sampling_params.get("n", 1) <= 1, "n > 1 is not supported yet for tool generation"
-        # 每个样本一组messages
-        contexts = [list(messages) for messages in messages_list]
-        final_responses = ["" for _ in range(len(messages_list))]
-        traj_ids = [str(uuid.uuid4()) for _ in range(len(messages_list))]
-        active_masks = [True for _ in range(len(messages_list))]
-        finish_reasons = [None for _ in range(len(messages_list))]
+        contexts = prompts
+        final_responses = ["" for _ in range(len(prompts))]
+        traj_ids = [str(uuid.uuid4()) for _ in range(len(prompts))]
+        active_masks = [True for _ in range(len(prompts))]
+        finish_reasons = [None for _ in range(len(prompts))]
         model = self.model_config.model
 
-        # call_tool_first逻辑：如果为True，先用action="" call tool server，获得observation并加到user message
+        # call_tool_first逻辑：如果为True，先用action="" call tool server，获得observation并merge进prompt
         obs_first_obs = None
         if getattr(self, 'call_tool_first', False):
-            actions = ["" for _ in range(len(messages_list))]
-            finish = [False for _ in range(len(messages_list))]
+            actions = ["" for _ in range(len(prompts))]
+            finish = [False for _ in range(len(prompts))]
             tool_result = self.call_tool_server(traj_ids, actions, finish, extra_fields=extra_fields)
-            # print(f"=========================[DEBUG] tool_result ============================\n {tool_result}")
+            print(f"=========================[DEBUG] tool_result ============================\n {tool_result}")
             observations = tool_result["observations"]
-            # observation加到user message
+            # 合并observation到prompt
+            contexts = [contexts[i] + str(observations[i]) for i in range(len(contexts))]
+            # obs也算response，拼到final_responses里
             for i in range(len(contexts)):
-                contexts[i].append({"role": "user", "content": str(observations[i])})
                 final_responses[i] += str(observations[i])
             obs_first_obs = observations
 
-        # print(f"=========================[DEBUG] traj_ids ============================\n {traj_ids}")
-        # print(f"=========================[DEBUG] contexts ============================\n  {contexts}")
+        print(f"=========================[DEBUG] traj_ids ============================\n {traj_ids}")
+        print(f"=========================[DEBUG] contexts ============================\n  {[c for c in contexts]}")
 
         # keep trying to generate the response until reached the tool-calling limit
         for action_step in range(self.tool_config.max_turns+1):
-            # print(f"========================================================================================")
-            # print(f"=========================[DEBUG] action_step {action_step}  ============================")
-            # print(f"========================================================================================")
+            print(f"========================================================================================")
+            print(f"=========================[DEBUG] action_step {action_step}  ============================\n")
+            print(f"========================================================================================")
             if action_step == self.tool_config.max_turns:
                 # last turn, don't stop by action stop tokens
                 sampling_params.pop("stop")
             active_traj_ids = [traj_ids[i] for i in range(len(traj_ids)) if active_masks[i]]
             active_contexts = [contexts[i] for i in range(len(contexts)) if active_masks[i]]
-            # print(f"=========================[DEBUG] active_traj_ids ============================\n {active_traj_ids}")
-            # print(f"=========================[DEBUG] active_contexts ============================\n  {active_contexts}")
+            print(f"=========================[DEBUG] active_traj_ids ============================\n {active_traj_ids}")
+            print(f"=========================[DEBUG] active_contexts ============================\n  {[c for c in active_contexts]}")
             if len(active_contexts) == 0:
-                # print("=========================[DEBUG] No active contexts, break loop. ============================")
+                print("=========================[DEBUG] No active contexts, break loop. ============================")
                 break
-            # print(f"=========================[DEBUG] sampling_params ============================\n  {[sampling_params]}")
-            # 每个active_contexts都重新apply_chat_template生成prompt
-            prompts = [self.tokenizer.apply_chat_template(msgs, add_generation_prompt=True, tokenize=False) for msgs in active_contexts]
+            print(f"=========================[DEBUG] sampling_params ============================\n  {[sampling_params]}")
+            # exit(1)
             outputs = self.send_request(
-                prompts,
+                active_contexts,
                 model,
                 sampling_params
             )
-            # print(f"=========================[DEBUG] outputs ============================\n {outputs}")
+            print(f"=========================[DEBUG] outputs ============================\n {outputs}")
             active_responses = [outputs.choices[i].text for i in range(len(outputs.choices))]
             active_finish_reasons = [outputs.choices[i].finish_reason for i in range(len(outputs.choices))]
-            # print(f"=========================[DEBUG] active_responses ============================\n  {active_responses}")
-            # print(f"=========================[DEBUG] active_finish_reasons ============================\n  {active_finish_reasons}")
+            print(f"=========================[DEBUG] active_responses ============================\n  {active_responses}")
+            print(f"=========================[DEBUG] active_finish_reasons ============================\n  {active_finish_reasons}")
             finishes = []
             for i in range(len(active_contexts)):
                 finish = True
@@ -280,7 +279,7 @@ class ModelService:
                     active_responses[i] = active_responses[i] + outputs.choices[i].stop_reason
                     finish = False
                 finishes.append(finish)
-            # print(f"=========================[DEBUG] finishes ============================\n  {finishes}")
+            print(f"=========================[DEBUG] finishes ============================\n  {finishes}")
             tool_responses = self.call_tool_server(
                 active_traj_ids,
                 active_responses,
@@ -288,34 +287,33 @@ class ModelService:
                 extra_fields=extra_fields
             )
             observations = self.post_process_observations(tool_responses["observations"])
-            # print(f"=========================[DEBUG] observations ============================\n  {observations}")
             dones = tool_responses["dones"]
             valids = tool_responses["valids"]
-            # print(f"=========================[DEBUG] dones ============================\n  {dones}")
-            # print(f"=========================[DEBUG] valids ============================\n  {valids}")
-            # print(f"=========================[DEBUG] active_masks ============================\n  {active_masks}")
+            print(f"=========================[DEBUG] dones ============================\n  {dones}")
+            print(f"=========================[DEBUG] valids ============================\n  {valids}")
             active_idx = 0
             for i in range(len(contexts)):
                 if active_masks[i]:
                     # 先拼action
-                    contexts[i].append({"role": "assistant", "content": active_responses[active_idx]})
+                    contexts[i] += active_responses[active_idx]
                     final_responses[i] += active_responses[active_idx]
-                    # print(f"=========================[DEBUG] {action_step} sample: +action ============================\n{active_responses[active_idx]}")
+                    print(f"=========================[DEBUG] {action_step} sample: +action ============================\n{active_responses[active_idx]}")
                     # 只有本轮没done的才拼observation
                     if not dones[active_idx]:
-                        contexts[i].append({"role": "user", "content": observations[active_idx]})
+                        contexts[i] += observations[active_idx]
                         final_responses[i] += observations[active_idx]
-                        # print(f"=========================[DEBUG] {action_step} sample: +observation ============================\n{observations}")
+                        print(f"=========================[DEBUG] {action_step} sample: +observation ============================\n{observations[active_idx]}")
                     finish_reasons[i] = active_finish_reasons[active_idx]
                     active_masks[i] = not dones[active_idx]
                     active_idx += 1
-            all_masks_false = all(not mask for mask in active_masks)
             # print(f"=========================[DEBUG] active_masks ============================\n  {active_masks}")
-            if all(dones) or all_masks_false:
-                # print("=========================[DEBUG] All dones True, break loop. ============================")
+            # print(f"=========================[DEBUG] final_responses ============================\n  {final_responses}")
+            # Server返回dones=True时立刻break
+            if all(dones):
+                print("=========================[DEBUG] All dones True, break loop. ============================")
                 break
-        final_responses_likePrompt = [self.tokenizer.apply_chat_template(contexts[i], add_generation_prompt=True, tokenize=False) for i in range(len(contexts))]
-        return final_responses_likePrompt, finish_reasons
+        
+        return final_responses, finish_reasons
     
     def generate_response(self, body: Dict[str, Any]) -> Dict[str, Any]:
         """process API request and generate response"""
@@ -333,11 +331,10 @@ class ModelService:
                                                     tokenize=False)
         # 判断是否需要传递extra_fields
         extra_fields = [body] if 'url' in body or 'url' in str(body) else None
-        # 适配新接口，messages_list为List[List[Dict]]
         if body.get('n', 1) > 1:
-            messages_list = [body['messages'] for _ in range(body["n"])]
+            prompts = [prompt for _ in range(body["n"])]
         else:
-            messages_list = [body['messages']]
+            prompts = [prompt]
 
         sampling_params = {
             "temperature": body.get("temperature", 1.0),
@@ -345,7 +342,7 @@ class ModelService:
             "top_p": body.get("top_p", 1.0),
             "stop": self.tool_config.action_stop_tokens,
         }
-        all_responses, finish_reasons = self.generate_with_tools(messages_list, sampling_params, extra_fields=extra_fields)
+        all_responses, finish_reasons = self.generate_with_tools(prompts, sampling_params, extra_fields=extra_fields)
         prompt_tokens = len(self.tokenizer.encode(prompt))
         completion_tokens = 0
         for response in all_responses:
