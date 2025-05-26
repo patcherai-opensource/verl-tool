@@ -77,19 +77,17 @@ class TextBrowserTool(BaseTool):
             self.actor_creation_order.remove(trajectory_id)
 
     def parse_action(self, action):
-        # """Parse action (here we return it as-is)."""
-        # return action, True
-        # if action is contain a substring like <think>balabala</think>```balabala```, return true, otherwise false
         """
-        Check if the action contains a pattern like <think>...</think>```...```.
-        Return (action, True) if found, otherwise (action, False).
+        检查action是否包含如下两种格式之一：
+        1. <think>.*?</think> 后跟若干空白和换行，再跟 ```.*?```
+        2. <think>.*?</think> 后跟若干空白和换行，再跟 <action>.*?</action>
+        前后都允许有任意数量空格和回车。
+        匹配则返回(action, True)，否则(action, False)
         """
-        if action  == "" or action is None: # Tentitively allow empty action, since first obs is needed
+        if action == "" or action is None:  # Tentitively allow empty action, since first obs is needed
             return action, True
-        pattern = r"<think>.*?</think>\s```.*?```"
+        pattern = r"<think>.*?</think>\s*(?:```.*?```|<action>.*?</action>)"
         matched = re.search(pattern, action, re.DOTALL)
-        # print("[INFO] action:", action)
-        # print("[INFO] matched:", matched)
         return action, bool(matched)
 
 
@@ -128,7 +126,7 @@ class TextBrowserTool(BaseTool):
         if isinstance(result, tuple):           # step_env
             obs, done, valid = result
         else:                                   # start_env
-            obs, done, valid = result, False, False
+            obs, done, valid = result, False, True
 
         # 4) Refresh LRU order *after* the step.
         if trajectory_id in self.actor_creation_order:
@@ -139,6 +137,9 @@ class TextBrowserTool(BaseTool):
         if done:
             obs = ""            # Clear the final observation
             self.delete_env(trajectory_id)
+
+        if not valid:
+            obs = "The action is invalid, please retry"
 
         return obs, done, valid
 

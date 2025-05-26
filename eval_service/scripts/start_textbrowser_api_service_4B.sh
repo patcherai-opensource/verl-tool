@@ -11,11 +11,11 @@ tool_server_url=http://$host:$port/get_observation
 # echo "Server (pid=$server_pid) started at $tool_server_url"
 
 # 2. start api service
-model_path="/home/zhiheng/cogito/base_models/qwen2.5-3b-baseline-step10"
-# model_path="Qwen/Qwen3-4B"
+# model_path="/home/zhiheng/cogito/base_models/qwen2.5-3b-baseline-step10"
+model_path="Qwen/Qwen3-4B"
 max_turns=5
 api_host="0.0.0.0"
-api_port=5000
+api_port=5001
 # action_stop_tokens= '```\n,<browser>,</action>'
 #action_stop_tokens='<action>stop'
 action_stop_tokens=''
@@ -28,7 +28,7 @@ echo "action_stop_tokens_file=$action_stop_tokens_file"
 
 deactivate
 source .venv/bin/activate
-CUDA_VISIBLE_DEVICES=0,1 python eval_service/app.py \
+CUDA_VISIBLE_DEVICES=2,3 python eval_service/app.py \
     --host $api_host \
     --port $api_port \
     --tool-server-url $tool_server_url \

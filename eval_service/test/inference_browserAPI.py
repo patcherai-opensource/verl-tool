@@ -4,37 +4,26 @@ from openai import OpenAI
 import os
 import tqdm
 import numpy as np
+import argparse
 
-# 配置
-data_path = "/home/zhiheng/cogito/verl-tool/data/wikiQA_debug/test.parquet"
-result_dir = "/home/zhiheng/cogito/verl-tool/eval_service/result"
-os.makedirs(result_dir, exist_ok=True)
-
-model_name = "/home/zhiheng/cogito/base_models/qwen2.5-3b-baseline-step10"
-result_path = os.path.join(result_dir, f"{os.path.basename(model_name)}_result.csv")
-
-client = OpenAI(api_key="sk-proj-1234567890", base_url="http://0.0.0.0:5000")
-
-df = pd.read_parquet(data_path)
+# 保持build_messages和infer_one函数主体不变，但infer_one增加client和model_name参数
 
 def build_messages(row):
-    # 这里可以根据实际情况调整prompt
+    # print(row)
     prompt = row['prompt']
     if isinstance(prompt, str):
         import ast
         prompt = ast.literal_eval(prompt)
     return prompt
 
-def infer_one(row):
+def infer_one(row, client, model_name):
     messages = build_messages(row)
     extra_body = row['extra_info']
     if isinstance(extra_body, str):
         import ast
         extra_body = ast.literal_eval(extra_body)
-    # 兼容 np.array
     if hasattr(extra_body, 'item'):
         extra_body = extra_body.item()
-    # 递归将所有ndarray转为list
     def convert_ndarray(obj):
         if isinstance(obj, np.ndarray):
             return obj.tolist()
@@ -45,6 +34,13 @@ def infer_one(row):
         else:
             return obj
     extra_body = convert_ndarray(extra_body)
+    # 新增：从extra_body里取question和golden_answers
+    if isinstance(extra_body, dict):
+        question = extra_body.get("question", row.get("question", None))
+        golden_answers = extra_body.get("golden_answers", row.get("golden_answers", None))
+    else:
+        question = row.get("question", None)
+        golden_answers = row.get("golden_answers", None)
     try:
         completion = client.chat.completions.create(
             model=model_name,
@@ -58,23 +54,68 @@ def infer_one(row):
         content = completion.choices[0].message.content
         finish_reason = completion.choices[0].finish_reason
     except Exception as e:
+        raise e
         content = f"[ERROR]{str(e)}"
         finish_reason = "error"
     return {
         "id": row.get("id", None),
-        "question": row.get("question", None),
-        "golden_answers": row.get("golden_answers", None),
+        "question": question,
+        "golden_answers": golden_answers,
         "output": content,
         "finish_reason": finish_reason
     }
 
-results = []
-with concurrent.futures.ThreadPoolExecutor(max_workers=8) as executor:
-    futures = [executor.submit(infer_one, row) for idx, row in df.iterrows()]
-    for f in tqdm.tqdm(concurrent.futures.as_completed(futures), total=len(futures), desc="推理进度"):
-        results.append(f.result())
 
-# 保存结果
-result_df = pd.DataFrame(results)
-result_df.to_csv(result_path, index=False)
-print(f"推理完成，结果已保存到 {result_path}")
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--data_path', type=str, default="/home/zhiheng/cogito/verl-tool/data/wikiQA_debug/test.parquet")
+    parser.add_argument('--result_dir', type=str, default="/home/zhiheng/cogito/verl-tool/eval_service/result")
+    parser.add_argument('--model_name', type=str, default="/home/zhiheng/cogito/base_models/qwen2.5-3b-baseline-step10")
+    parser.add_argument('--api_port', type=int, default=5000)
+    parser.add_argument('--api_key', type=str, default="sk-proj-1234567890")
+    parser.add_argument('--max_workers', type=int, default=16)
+    args = parser.parse_args()
+
+    os.makedirs(args.result_dir, exist_ok=True)
+    result_path = os.path.join(args.result_dir, f"{os.path.basename(args.model_name)}_result.csv")
+    client = OpenAI(api_key=args.api_key, base_url=f"http://0.0.0.0:{args.api_port}")
+
+    df = pd.read_parquet(args.data_path)
+    if 'id' not in df.columns:
+        df['id'] = range(len(df)) 
+    # print(df.head)
+    # print(df.iloc[0]['extra_info'])
+    # exit(1)
+
+    # 尝试加载已存在的csv，获取已完成id
+    if os.path.exists(result_path):
+        result_df = pd.read_csv(result_path)
+        finished_ids = set(result_df['id'].dropna().unique())
+        print(f"已完成推理样本数: {len(finished_ids)}")
+    else:
+        result_df = pd.DataFrame(columns=["id", "question", "golden_answers", "output", "finish_reason"])
+        finished_ids = set()
+
+    # 过滤未完成的样本
+    todo_rows = [row for idx, row in df.iterrows() if row['id'] not in finished_ids]
+    print(f"待推理样本数: {len(todo_rows)}")
+
+    # 推理并实时append到csv
+    with concurrent.futures.ThreadPoolExecutor(max_workers=args.max_workers) as executor:
+        futures = {executor.submit(infer_one, row, client, args.model_name): row['id'] for row in todo_rows}
+        for f in tqdm.tqdm(concurrent.futures.as_completed(futures), total=len(futures), desc="推理进度"):
+            try:
+                result = f.result()
+            except Exception as e:
+                raise e
+                exit(1)
+                # 异常样本写入空output
+                row_id = futures[f]
+                result = {"id": row_id, "question": "", "golden_answers": "", "output": f"[ERROR]{str(e)}", "finish_reason": "error"}
+            # 追加到csv
+            result_df.loc[len(result_df)] = result
+            result_df.to_csv(result_path, index=False)
+    print(f"推理完成，结果已保存到 {result_path}")
+
+if __name__ == "__main__":
+    main()
