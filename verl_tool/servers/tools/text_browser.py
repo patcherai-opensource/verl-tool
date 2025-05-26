@@ -128,6 +128,17 @@ class TextBrowserTool(BaseTool):
         else:                                   # start_env
             obs, done, valid = result, False, True
 
+        # 新增：打印输入和输出信息
+        output = (
+            "\n%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%\n"
+            f"trajectory_id: {trajectory_id}\n"
+            f"action: {action}\n"
+            f"extra_field: {extra_field}\n"
+            f"observation: {obs}\n"
+            "%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%\n"
+        )
+        print(output)
+
         # 4) Refresh LRU order *after* the step.
         if trajectory_id in self.actor_creation_order:
             self.actor_creation_order.remove(trajectory_id)

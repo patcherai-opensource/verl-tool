@@ -18,6 +18,7 @@ from tqdm import tqdm
 from typing import List
 from .config import AgentActorConfig
 from .tensor_helper import TensorHelper, TensorConfig
+from transformers import AutoTokenizer
 
 # 1) A sanitizer that strips all embedded NULs (and, optionally, any
 #    other C0 control characters except common whitespace).
@@ -295,6 +296,9 @@ class AgentActorManager:
 
 
     def run_llm_loop(self, gen_batch: DataProto) -> Tuple[Dict, Dict]:
+        # print(self.config)
+        # print(getattr(self.config, 'debug', False))
+        # exit(1)
         """Run main LLM generation loop."""
         ori_meta_info = gen_batch.meta_info
         gen_batch = self._preprocess_inputs(gen_batch)
@@ -386,8 +390,20 @@ class AgentActorManager:
             }, meta_info=ori_meta_info)
             if step == self.config.max_turns:
                 agent_sampling_params.pop('stop')
+            # === 新增：记录LLM输入输出 ===
+            llm_input = rollings_active.to_dict() if hasattr(rollings_active, 'to_dict') else rollings_active
             with self.actor_rollout_wg.rollout.update_sampling_params(**agent_sampling_params):
                 gen_output = self.actor_rollout_wg.rollout.generate_sequences(rollings_active) # [active_size, response_length]
+            llm_output = gen_output.to_dict() if hasattr(gen_output, 'to_dict') else gen_output
+            if getattr(self.config, 'debug', False):
+                import pickle
+                try:
+                    with open(f"temp_input_{step}", "wb") as f_in:
+                        pickle.dump(llm_input, f_in)
+                    with open(f"temp_output_{step}", "wb") as f_out:
+                        pickle.dump(llm_output, f_out)
+                except Exception as e:
+                    print(f"[WARN] Failed to pickle llm_input/llm_output: {e}")
 
             meta_info = gen_output.meta_info
             responses_ids, responses_str, do_actions = self._postprocess_responses(gen_output.batch['responses'], step) # [active_size, ...]
@@ -414,17 +430,17 @@ class AgentActorManager:
                 extra_fields=rollings.non_tensor_batch.get('extra_info', None)
             )
 
-            # for debug
-            # with open(f"temp-{step}.json", 'w') as f:
-            #     json.dump([{
-            #         'response': resp,
-            #         'do_action': do_action,
-            #         'traj_id': traj_id,
-            #         'next_obs': next_obs[i],
-            #         'done': done,
-            #         'valid_action': valid_action[i],
-            #     } for i, (resp, do_action, traj_id, done) in enumerate(zip(responses_str, do_actions, active_uids, dones))], f, indent=4)
-            #     print(f"saved responses to temp-{step}.json")
+            if getattr(self.config, 'debug', False):
+                with open(f"temp-{step}.json", 'w') as f:
+                    json.dump([{
+                        'response': resp,
+                        'do_action': do_action,
+                        'traj_id': traj_id,
+                        'next_obs': next_obs[i],
+                        'done': done,
+                        'valid_action': valid_action[i],
+                    } for i, (resp, do_action, traj_id, done) in enumerate(zip(responses_str, do_actions, active_uids, dones))], f, indent=4)
+                    print(f"saved responses to temp-{step}.json")
 
             curr_active_mask = torch.tensor([not done for done in dones], dtype=torch.bool)
             active_mask = active_mask * curr_active_mask
@@ -473,6 +489,7 @@ class AgentActorManager:
         print("ACTIVE_TRAJ_NUM:", active_num_list)
 
         results = self._compose_final_output(original_left_side, original_right_side, non_tensors, ori_meta_info)
+        exit(1)
         return results
 
     def _compose_final_output(

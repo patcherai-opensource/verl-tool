@@ -19,3 +19,4 @@ class AgentActorConfig:
     call_tool_first: bool=False
     min_action_num: int=0
     action_stop_tokens: list=None
+    debug: bool=False
