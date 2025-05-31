@@ -90,6 +90,7 @@ class AgentActorManager:
         if self.config.mtrl_sep is None:
             messages = [{"role": "system", "content": "{obs}"}]
             self.config.mtrl_sep = "\n" + self.tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+            self.config.mtrl_sep = self.config.mtrl_sep.replace("system", "user") # change user
 
     def _batch_tokenize(self, responses: List[str]) -> torch.Tensor:
         """Tokenize a batch of responses."""

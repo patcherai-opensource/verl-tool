@@ -257,9 +257,9 @@ class FirejailPythonCodeWithTestTool(BaseTool):
     timeout = TIMEOUT
     stop_tokens = ["```output", "<output>", "<tool_call>"]
     enable_history_code_execution = True
-    enable_mannual_reflection = False
+    enable_mannual_reflection = False # deprecated
     force_run_test_cases = True
-    done_without_error = False
+    done_without_error = True # passive
     python_path = None
     pre_import_lib = False
     
@@ -419,6 +419,7 @@ class FirejailPythonCodeWithTestTool(BaseTool):
                         test_cases = json.loads(test_cases)[:10] # debug
                     # execute the public test cases
                     if isinstance(test_cases, list):
+                        # acecoder data
                         # list of assert
                         test_cases_code = "\n".join(test_cases)
                         if test_cases_code in new_code:
@@ -436,6 +437,7 @@ class FirejailPythonCodeWithTestTool(BaseTool):
                             else:
                                 test_result += "\nI get the execution result and does the execution result match my expectations? Let me analyze one by one."
                     elif isinstance(test_cases, dict):
+                        # deepcoder data
                         assert "inputs" in test_cases and "outputs" in test_cases, f"Invalid test cases format: {test_cases.keys()}"
                         test_result = ""
                         test_cases_passed = True
