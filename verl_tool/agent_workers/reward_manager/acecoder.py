@@ -72,7 +72,7 @@ def parse_code(action: str, mode="all"):
         return ""
     
     if mode == "all":
-        parsed_code = "\n".join([code for code in all_valid_python_code if check_syntax(code)])
+        parsed_code = "\n".join([code for code in all_valid_python_code])
     elif mode == "first":
         # Use the first code block found
         parsed_code = all_valid_python_code[0]
@@ -97,7 +97,8 @@ def parse_code(action: str, mode="all"):
             all_valid_python_code = re.findall(r"```\n?python(.*?)```", last_turn, re.DOTALL)
         if len(all_valid_python_code) == 0:
             return ""
-        parsed_code = "\n".join([code for code in all_valid_python_code if check_syntax(code) or True])
+
+        parsed_code = "\n".join([code for code in all_valid_python_code])
     else:
         raise ValueError(f"Invalid mode: {mode}. Use 'all', 'first', 'last', or 'all_in_last_turn'.")
     
