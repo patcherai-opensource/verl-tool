@@ -809,7 +809,5 @@ class AgentActorManager:
                 valid_action.append(0)
                 _finishs.append(1)
 
-        if is_last_step:
-            next_obs = [''] * len(next_obs)  # clear next_obs in the last step
         assert len(active_observations) == 0
         return next_obs, dones, valid_action, _finishs
