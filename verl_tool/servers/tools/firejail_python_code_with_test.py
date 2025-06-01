@@ -246,7 +246,7 @@ def execute_python_in_firejail(code: Union[str, List[str]], timeout: int=TIMEOUT
         os.remove(file_path)
     except Exception as e:
         pass
-    return stdout, stderr if stderr else "", has_error
+    return stdout, (stderr if stderr else ""), has_error
 
 @register_tool
 class FirejailPythonCodeWithTestTool(BaseTool):
