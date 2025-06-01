@@ -253,7 +253,7 @@ class FirejailPythonCodeWithTestTool(BaseTool):
     tool_type = "firejail_python_code_with_test"
     timeout = TIMEOUT
     stop_tokens = ["```output", "<output>", "<tool_call>"]
-    enable_history_code_execution = True
+    enable_history_code_execution = False
     enable_mannual_reflection = False # deprecated
     force_run_test_cases = True
     done_without_error = True # passive
