@@ -369,9 +369,15 @@ class FirejailPythonCodeWithTestTool(BaseTool):
                         
                         if "fn_name" in test_cases:
                             if isinstance(input_case, str):
-                                input_arg = json.loads(input_case)
+                                try:
+                                    input_arg = json.loads(input_case)
+                                except json.JSONDecodeError:
+                                    input_arg = input_case
                                 if isinstance(output_case, str):
-                                    expected_return = json.loads(output_case)
+                                    try:
+                                        expected_return = json.loads(output_case)
+                                    except json.JSONDecodeError:
+                                        expected_return = output_case
                                 elif isinstance(output_case, list):
                                     expected_return = ", ".join([str(x) for x in output_case])
                                     if len(output_case) > 1:
