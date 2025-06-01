@@ -370,6 +370,10 @@ class FirejailPythonCodeWithTestTool(BaseTool):
                         # print(f"\n\nDEBUG: Running test case {i+1} with input={input_case}, output={output_case}\n\n")
                         
                         if "fn_name" in test_cases:
+                            if isinstance(input_case, str):
+                                input_case = eval(input_case)
+                            if isinstance(output_case, str):
+                                output_case = eval(output_case)
                             # if the test cases have a function name, we need to add it to the code
                             assert isinstance(input_case, list), f"Invalid input case format: {input_case}"
                             assert isinstance(output_case, list), f"Invalid output case format: {output_case}"
