@@ -76,6 +76,20 @@ Coding questions can ask various forms of program solutions:
 Let's think step by step and generate the final program in a markdown code block like this: ```python\nyour code here\n```.
 """
 
+code_repair_instruction = """
+You are a helpful assistant. the user ask coding questions and you need to solve it. You will first reason about how to solve it, then write Python Code in markdown blocks to answer the question.
+
+Note: 
+- All questions are Python coding problems and should be solved using Python only.
+- The input provided to you is always correct. Never question the input.
+- If the coding question has a starter code, use the starter code to write the solution.
+- If the coding question specified a function signature, use it to write the solution.
+- In your answer functions, always return the output of the function, do not print it.
+- You should think step by step and generate the final program in a markdown code block like this: ```python\n<your code here>\n```.
+- Do not write any comments, example usages, tests or print statements in your answer, do not repeat your solutions.
+- Your solution will be extracted and tested on some test cases. Use the test result given to you to fix and refine your solution.
+"""
+
 def main(
     dataset_path: str = 'agentica-org/DeepCoder-Preview-Dataset',
     subset='all',
@@ -141,12 +155,14 @@ def main(
 
         def process_fn(example, idx):
             
-            if propmt_type == 'complex':
-                system_instruction = complex_execution_prompt if add_execution_prompt else complex_coder_instruction
-            elif propmt_type == 'naive':
-                system_instruction = naive_execution_prompt if add_execution_prompt else naive_coder_instruction
-            else:
-                raise ValueError(f"Unknown propmt_type: {propmt_type}")
+            # if propmt_type == 'complex':
+            #     system_instruction = complex_execution_prompt if add_execution_prompt else complex_coder_instruction
+            # elif propmt_type == 'naive':
+            #     system_instruction = naive_execution_prompt if add_execution_prompt else naive_coder_instruction
+            # else:
+            #     raise ValueError(f"Unknown propmt_type: {propmt_type}")
+            system_instruction = code_repair_instruction
+            
             
             question_raw = example.pop('problem')
             inputs_outputs = example.pop('tests')
@@ -237,7 +253,8 @@ def main(
             'inputs_outputs': datasets.Value(dtype='large_string', id=None),
             'question': datasets.Value(dtype='string', id=None),
             'split': datasets.Value(dtype='string', id=None),
-            'test_cases': datasets.Value(dtype='null', id=None)
+            'test_cases': datasets.Value(dtype='null', id=None),
+            "public_tests": datasets.Value(dtype='large_string', id=None),  # somehow its not added
         }
     }
     features = datasets.Features(features)
@@ -264,5 +281,5 @@ python examples/data_preprocess/deepcoder.py --dataset_path agentica-org/DeepCod
 python examples/data_preprocess/deepcoder.py --dataset_path agentica-org/DeepCoder-Preview-Dataset --subset taco --local_dir data/deepcoder --add_execution_prompt
 python examples/data_preprocess/deepcoder.py --dataset_path agentica-org/DeepCoder-Preview-Dataset --subset codeforces --local_dir data/deepcoder --add_execution_prompt
 python examples/data_preprocess/deepcoder.py --dataset_path agentica-org/DeepCoder-Preview-Dataset --subset primeintellect --local_dir data/deepcoder --add_execution_prompt
-python examples/data_preprocess/deepcoder.py --dataset_path agentica-org/DeepCoder-Preview-Dataset --subset all --local_dir data/deepcoder --add_execution_prompt
+python examples/data_preprocess/deepcoder.py --dataset_path agentica-org/DeepCoder-Preview-Dataset --subset all --local_dir data/deepcoder --add_execution_prompt --add_public_tests True
 """

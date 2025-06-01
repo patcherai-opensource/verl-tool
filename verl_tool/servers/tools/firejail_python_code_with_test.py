@@ -412,11 +412,15 @@ class FirejailPythonCodeWithTestTool(BaseTool):
             else:
                 observation = "\n" + observation + "\n"
             
-            if not has_error and self.force_run_test_cases:
+            
+            # if not has_error and self.force_run_test_cases:
+            if self.force_run_test_cases:
+                observation = ""
                 test_cases = extra_field.get("public_tests", None) if extra_field else None
                 if test_cases:
+                    # print(test_cases)
                     if isinstance(test_cases, str):
-                        test_cases = json.loads(test_cases)[:10] # debug
+                        test_cases = json.loads(test_cases) # [:10] # debug
                     # execute the public test cases
                     if isinstance(test_cases, list):
                         # acecoder data
@@ -444,19 +448,75 @@ class FirejailPythonCodeWithTestTool(BaseTool):
                         for i in range(len(test_cases["inputs"])):
                             input_case = test_cases["inputs"][i]
                             output_case = test_cases["outputs"][i]
+                            
+                            print(f"\n\nDEBUG: Running test case {i+1} with input={input_case}, output={output_case}\n\n")
+                            
+                            
+                            
+                            # # check if the input_case and output_case are lists or strings
+                            # if isinstance(input_case, list):
+                            #     input_case = str(test_cases["inputs"][i][0])
+                            # if isinstance(output_case, list):
+                            #     output_case = str(test_cases["outputs"][i][0])
+                            # # otherwise treat them as pure string
+                            # input_case = str(input_case)
+                            # output_case = str(output_case)
+                            
+                            
+                            
                             test_codes = code_to_execute
                             test_stdin = (stdin + "\n" + input_case)
+                            
+                            
                             test_execution_result, has_error = execute_python_in_firejail(test_codes, self.timeout, test_stdin, self.python_path, self.pre_import_lib)
                             test_execution_result = test_execution_result.replace(execution_result, "", 1)
-                            test_case_output_match = test_execution_result == output_case
+                            test_case_output_match = str(test_execution_result) == str(output_case)
+                            
+                            
+                            # print(f"\n\nTest stdin: {test_stdin}")
+                            # print(f"Test case {i+1}: input={input_case}, output={output_case}")
+                            # print(f"\nTest Code: {test_codes}\n")
+                            # print(f"Test execution result: {test_execution_result}\n\n")
+                            
                             if not test_case_output_match:
                                 test_cases_passed = False
-                            test_result += f"Testing the above code with the following test case:\n```python\n{test_codes}\n```\n\nTest input:\n```input\n{input_case}\n```\n\nExpected output:\n```expected_output\n{output_case}\n```\n\nTest result:\n```output\n{test_execution_result}\n```\nMatching expected output: {test_case_output_match}\n"
+                            
+                            message = ""
+                            
+                            # match non-passed generations
+                            if not test_cases_passed:
+                                metadata = {
+                                    "error": test_execution_result,
+                                    "inputs": input_case,
+                                    "expected": output_case,
+                                    "output": test_execution_result
+                                }
+                                
+                                # not runtime err or time-limit exceeded
+                                if not has_error:
+                                    # case: wrong answer
+                                    message = f"The above code is incorrect and got a wrong answer.\nInput: {metadata['inputs']}\nGenerated Output: {metadata['output']}\nExpected: {metadata['expected']}"
+                                else:
+                                    # time limit exceeded
+                                    if "execution timed out" in observation.lower():
+                                        message = f"The above code is incorrect and got time limit exceeded.\n{metadata['error']}\nInput: {metadata['inputs']}\nExpected: {metadata['expected']}"
+                                    elif "syntaxerror" in observation.lower():
+                                        message = f"The above code is incorrect and got a syntax error.\nInput: {metadata['inputs']}\nExpected: {metadata['expected']}\n{metadata['error']}"
+                                    else:
+                                        message = f"The above code is incorrect and got a runtime error.\nInput: {metadata['inputs']}\nExpected: {metadata['expected']}\n{metadata['error']}"
+                            test_result = message + "\n"
+                            
+                            if not test_cases_passed:
+                                break
                         if test_cases_passed:
-                            test_result += "All public test cases passed!\n"
+                            test_result = "All public test cases passed!\n"
                     else:
                         raise ValueError(f"Invalid test cases format: {test_cases}")
-                    observation = observation + "\n" + test_result
+                    observation = test_result
+                    
+                    # print(f"\n\nObservation: {observation}")
+        
+                    
             if self.enable_mannual_reflection:
                 # case: empty (correctly runned or the test case does not have output, need to check)
                 if execution_result == "":
