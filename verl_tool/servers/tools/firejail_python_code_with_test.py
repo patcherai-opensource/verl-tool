@@ -371,16 +371,28 @@ class FirejailPythonCodeWithTestTool(BaseTool):
                         
                         if "fn_name" in test_cases:
                             if isinstance(input_case, str):
-                                input_case = eval(input_case)
-                            if isinstance(output_case, str):
-                                output_case = eval(output_case)
-                            # if the test cases have a function name, we need to add it to the code
-                            assert isinstance(input_case, list), f"Invalid input case format: {input_case}"
-                            assert isinstance(output_case, list), f"Invalid output case format: {output_case}"
-                            input_arg = ", ".join([str(x) for x in input_case])
-                            expected_return = ", ".join([str(x) for x in output_case])
-                            if len(output_case) > 1:
-                                expected_return = f"[{expected_return}]"
+                                input_arg = json.loads(input_case)
+                                if isinstance(output_case, str):
+                                    expected_return = json.loads(output_case)
+                                elif isinstance(output_case, list):
+                                    expected_return = ", ".join([str(x) for x in output_case])
+                                    if len(output_case) > 1:
+                                        expected_return = f"[{expected_return}]"
+                                else:
+                                    raise ValueError(f"Invalid output case format: {output_case}")
+                            elif isinstance(input_case, list):
+                                input_arg = ", ".join([str(x) for x in input_case])
+                                if isinstance(output_case, str):
+                                    expected_return = output_case
+                                elif isinstance(output_case, list):
+                                    expected_return = ", ".join([str(x) for x in output_case])
+                                    if len(output_case) > 1:
+                                        expected_return = f"[{expected_return}]"
+                                else:
+                                    raise ValueError(f"Invalid output case format: {output_case}")
+                            else:
+                                raise ValueError(f"Invalid input case format: {input_case}")
+                              
                             test_codes = code_to_execute + f"\nassert {test_cases['fn_name']}({input_arg}) == {expected_return}\n"
                             test_stdin = stdin
                             test_stdout, test_stderr, has_error = execute_python_in_firejail(test_codes, self.timeout, test_stdin, self.python_path, self.pre_import_lib)
