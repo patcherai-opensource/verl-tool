@@ -155,9 +155,8 @@ ray start --address='head_node_ip:6379' --block # start ray worker node
 # Start the tool server
 host=localhost
 port=5000
-python -m verl_tool.servers.serve --host $host --port $port --tool_type "firejail_python_code_test" --workers_per_tool 4 &
-python -m verl_tool.servers.tests.test_firejail_python_code_tool firejail --url=http://localhost:5000/get_observation
-```
+python -m verl_tool.servers.serve --host $host --port $port --tool_type "firejail_python_code_with_test" --workers_per_tool 4 &
+python -m verl_tool.servers.tests.test_firejail_python_code_with_test_tool firejail --url=http://localhost:5000/get_observation
 ```
 
 
