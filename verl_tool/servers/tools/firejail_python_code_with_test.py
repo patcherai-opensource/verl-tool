@@ -401,7 +401,7 @@ class FirejailPythonCodeWithTestTool(BaseTool):
                             test_codes = code_to_execute
                             test_stdin = (stdin + input_case)
                             test_stdout, test_stderr, has_error = execute_python_in_firejail(test_codes, self.timeout, test_stdin, self.python_path, self.pre_import_lib)
-                            test_case_output_match = str(test_stdout).strip(' \n') == str(output_case).rstrip(' \n') # assume empty space and newline is not what the problem wants
+                            test_case_output_match = str(test_stdout).strip(' \n') == str(output_case).strip(' \n') # assume empty space and newline is not what the problem wants
 
                             # print(f"\n\nDEBUG: Running test case {i+1} with input={input_case}, output={output_case}\n\n")
                             # print(f"Test stdin: {test_stdin}")
