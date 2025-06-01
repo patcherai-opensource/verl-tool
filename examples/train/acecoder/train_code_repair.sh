@@ -1,23 +1,23 @@
 ppset -x
-dataset_name1=acecoder_long/CodeDPO-AceCoderV2-150K-processed-Qwen32B-inference-with-execution-prompt-complex
-dataset_name2=deepcoder/all-with-execution-prompt-complex
-dataset_name3=acecoderv2/AceCoderV2-122K-processed-filtered-with-execution-prompt-complex
-dataset_name4=acecoder_long/AceCoderV2-69K-with-execution-prompt-with-public-tests-complex
-dataset_name5=acecoder_custom/AceCoderV2-69K-system-prompt-12
+# dataset_name1=acecoder_long/CodeDPO-AceCoderV2-150K-processed-Qwen32B-inference-with-execution-prompt-complex
+dataset_name2=deepcoder/all-with-execution-prompt-with-public-tests-complex
+# dataset_name3=acecoderv2/AceCoderV2-122K-processed-filtered-with-execution-prompt-complex
+# dataset_name4=acecoder_long/AceCoderV2-69K-with-execution-prompt-with-public-tests-complex
+# dataset_name5=acecoder_custom/AceCoderV2-69K-system-prompt-12
 # train_data=[$(pwd)/data/${dataset_name1}/train.parquet,\
 # $(pwd)/data/${dataset_name2}/train.parquet]
 # val_data=[$(pwd)/data/${dataset_name1}/test.parquet,\
 # $(pwd)/data/${dataset_name2}/test.parquet]
 
-train_data=[$(pwd)/data/${dataset_name5}/train.parquet]
-val_data=[$(pwd)/data/${dataset_name5}/test.parquet]
+train_data=[$(pwd)/data/${dataset_name2}/train.parquet]
+val_data=[$(pwd)/data/${dataset_name2}/test.parquet]
 
 model_name=Qwen/Qwen2.5-Coder-1.5B-Instruct
 rl_alg=grpo # gae(ppo) or grpo, if grpo, then better set n>1 otherwise the group norm can not be effective
-n_gpus_per_node=8
+n_gpus_per_node=4
 n_nodes=1
-n=16
-batch_size=128
+n=8
+batch_size=64
 ppo_mini_batch_size=$batch_size
 max_prompt_length=1536
 max_response_length=3072
@@ -27,8 +27,8 @@ top_p=1.0
 strategy="fsdp_agent" # remove _agent for normal verl behavior
 action_stop_tokens=''
 # action_stop_tokens="</python>"
-max_turns=3
-min_action_num=3
+max_turns=1
+min_action_num=1
 mask_observations=True # mask observations for kl loss and gradient descent
 kl_loss_coef=0.0
 kl_coef=0
@@ -44,7 +44,7 @@ do_offload=True # control actor's fsdp.[param|optimizer]_offload and actor_rollo
 use_dynamic_bsz=True # faster
 ulysses_sequence_parallel_size=1 # set to 1 for normal verl behavior, otherwise it will cause OOM
 fsdp_size=-1
-enable_mtrl=False # enable multi-turn training
+enable_mtrl=True # enable multi-turn training
 max_action_length=1536
 
 
@@ -138,7 +138,7 @@ PYTHONUNBUFFERED=1 python3 -m verl_tool.trainer.main_ppo \
     +trainer.remove_previous_ckpt_in_save=True \
     trainer.save_freq=10 \
     trainer.test_freq=10 \
-    trainer.total_epochs=1
+    trainer.total_epochs=1 
 
 
 pkill -P -9 $server_pid

@@ -80,6 +80,10 @@ def parse_code(action: str, mode="all"):
         # Use the last code block found
         parsed_code = all_valid_python_code[-1]
     elif mode == "all_in_last_turn":
+        if action.endswith("<|im_start|>assistant\n"):
+            action = action[:-len("<|im_start|>assistant\n")]
+        
+        
         # parse all the code blocks only in the last assistant turn
         # find the last assistant turn
         last_turn_start_idx = action.rfind('<|im_start|>assistant')
@@ -87,12 +91,13 @@ def parse_code(action: str, mode="all"):
             last_turn = action
         else:
             last_turn = action[last_turn_start_idx:]
+            
         all_valid_python_code = re.findall(r"<python>(.*?)</python>", last_turn, re.DOTALL)
         if not all_valid_python_code:
             all_valid_python_code = re.findall(r"```\n?python(.*?)```", last_turn, re.DOTALL)
         if len(all_valid_python_code) == 0:
             return ""
-        parsed_code = "\n".join([code for code in all_valid_python_code if check_syntax(code)])
+        parsed_code = "\n".join([code for code in all_valid_python_code if check_syntax(code) or True])
     else:
         raise ValueError(f"Invalid mode: {mode}. Use 'all', 'first', 'last', or 'all_in_last_turn'.")
     
@@ -120,7 +125,7 @@ class AceCoderRewardManager:
         self.step_idx = None
         self.n_workers = 64
         self.binary = True
-        self.parse_code_mode = "last" # "all", "first", "last"
+        self.parse_code_mode = "all_in_last_turn" # "all", "first", "last"
         self.add_format_think_penalty = False # -0.5 if not begines with <think> and end with </think>
         self.add_format_answer_penalty = False # -0.5 if not having <answer> </answer>
         self.add_valid_action_penalty = True # -1.0 if num turns > 0 not action not valid
