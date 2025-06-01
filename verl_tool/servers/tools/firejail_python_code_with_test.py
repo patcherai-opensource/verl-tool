@@ -449,37 +449,39 @@ class FirejailPythonCodeWithTestTool(BaseTool):
                             input_case = test_cases["inputs"][i]
                             output_case = test_cases["outputs"][i]
                             
-                            print(f"\n\nDEBUG: Running test case {i+1} with input={input_case}, output={output_case}\n\n")
+                            # print(f"\n\nDEBUG: Running test case {i+1} with input={input_case}, output={output_case}\n\n")
+                            
+                            if "fn_name" in test_cases:
+                                # if the test cases have a function name, we need to add it to the code
+                                assert isinstance(input_case, list), f"Invalid input case format: {input_case}"
+                                assert isinstance(output_case, list), f"Invalid output case format: {output_case}"
+                                input_arg = ", ".join([str(x) for x in input_case])
+                                expected_return = ", ".join([str(x) for x in output_case])
+                                if len(output_case) > 1:
+                                    expected_return = f"[{expected_return}]"
+                                test_codes = code_to_execute + f"\nassert {test_cases['fn_name']}({input_arg}) == {expected_return}\n"
+                                test_stdin = stdin
+                                test_execution_result, has_error = execute_python_in_firejail(test_codes, self.timeout, test_stdin, self.python_path, self.pre_import_lib)
+                                test_execution_result = test_execution_result.replace(execution_result, "", 1)
+                                if has_error:
+                                    test_cases_passed = False
+                            else:
+                            
+                                test_codes = code_to_execute
+                                test_stdin = (stdin + "\n" + input_case)
                             
                             
-                            
-                            # # check if the input_case and output_case are lists or strings
-                            # if isinstance(input_case, list):
-                            #     input_case = str(test_cases["inputs"][i][0])
-                            # if isinstance(output_case, list):
-                            #     output_case = str(test_cases["outputs"][i][0])
-                            # # otherwise treat them as pure string
-                            # input_case = str(input_case)
-                            # output_case = str(output_case)
-                            
-                            
-                            
-                            test_codes = code_to_execute
-                            test_stdin = (stdin + "\n" + input_case)
-                            
-                            
-                            test_execution_result, has_error = execute_python_in_firejail(test_codes, self.timeout, test_stdin, self.python_path, self.pre_import_lib)
-                            test_execution_result = test_execution_result.replace(execution_result, "", 1)
-                            test_case_output_match = str(test_execution_result) == str(output_case)
-                            
-                            
-                            # print(f"\n\nTest stdin: {test_stdin}")
-                            # print(f"Test case {i+1}: input={input_case}, output={output_case}")
-                            # print(f"\nTest Code: {test_codes}\n")
-                            # print(f"Test execution result: {test_execution_result}\n\n")
-                            
-                            if not test_case_output_match:
-                                test_cases_passed = False
+                                test_execution_result, has_error = execute_python_in_firejail(test_codes, self.timeout, test_stdin, self.python_path, self.pre_import_lib)
+                                test_execution_result = test_execution_result.replace(execution_result, "", 1)
+                                test_case_output_match = str(test_execution_result) == str(output_case)
+                                
+                                # print(f"\n\nTest stdin: {test_stdin}")
+                                # print(f"Test case {i+1}: input={input_case}, output={output_case}")
+                                # print(f"\nTest Code: {test_codes}\n")
+                                # print(f"Test execution result: {test_execution_result}\n\n")
+                                
+                                if not test_case_output_match:
+                                    test_cases_passed = False
                             
                             message = ""
                             

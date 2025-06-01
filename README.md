@@ -149,6 +149,18 @@ bash examples/train/acecoder/train.sh # train the model
 ray start --address='head_node_ip:6379' --block # start ray worker node
 # no need to run the training script on worker node
 ```
+
+### Test Servers
+```bash
+# Start the tool server
+host=localhost
+port=5000
+python -m verl_tool.servers.serve --host $host --port $port --tool_type "firejail_python_code_test" --workers_per_tool 4 &
+python -m verl_tool.servers.tests.test_firejail_python_code_tool firejail --url=http://localhost:5000/get_observation
+```
+```
+
+
 ### Logs 
 The training step records are automatically saved in [`verl_step_records`](verl_step_records).
 
