@@ -155,7 +155,7 @@ def execute_python_in_firejail(code: Union[str, List[str]], timeout: int=TIMEOUT
     """
     # Check for forbidden imports first
     if check_forbidden_imports(code):
-        return "Execution blocked: Code contains potentially dangerous operations or imports.", True
+        return "", "Execution blocked: Code contains potentially dangerous operations or imports.", True
     
     # Create a minimal environment instead of copying everything
     original_env = os.environ.copy()
@@ -345,19 +345,17 @@ class FirejailPythonCodeWithTestTool(BaseTool):
                 if isinstance(test_cases, list):
                     # acecoder data
                     # list of assert
-                    test_cases_code = "\n".join(test_cases)
-                    if test_cases_code in new_code:
-                        # already tested, pass
-                        test_result = ""
-                    else:
-                        test_codes = code_to_execute + "\n" + test_cases_code
+                    for test_case_i in test_cases:
+                        test_codes = code_to_execute + "\n" + test_case_i # plus an assert test
                         test_stdout, test_stderr, has_error = execute_python_in_firejail(test_codes, self.timeout, stdin, self.python_path, self.pre_import_lib)
-                        if not has_error:
-                            test_result = "\nAll public test cases passed!"
-                        else:
-                            test_result = f"Testing the above code with the following test cases:\n```python\n{test_cases_code}\n```\n\nTest result:\n```output\n{test_stdout}\n{test_stderr}\n```\n"
-                            test_result = f"The above code is incorrect: Error:\n{test_stderr}\n"
-                            code_has_error = True
+                        if has_error:
+                            test_cases_passed = False
+                            break
+                    if test_cases_passed:
+                        test_result = "\nAll public test cases passed!"
+                    else:
+                        test_result = f"The above code is incorrect. \nFailed test case: {test_case_i}\nError:{test_stdout}\n{test_stderr}"
+                        code_has_error = True
                 elif isinstance(test_cases, dict):
                     # deepcoder data
                     assert "inputs" in test_cases and "outputs" in test_cases, f"Invalid test cases format: {test_cases.keys()}"
@@ -403,7 +401,7 @@ class FirejailPythonCodeWithTestTool(BaseTool):
                             test_codes = code_to_execute
                             test_stdin = (stdin + input_case)
                             test_stdout, test_stderr, has_error = execute_python_in_firejail(test_codes, self.timeout, test_stdin, self.python_path, self.pre_import_lib)
-                            test_case_output_match = str(test_stdout).rstrip('\n') == str(output_case).rstrip('\n')
+                            test_case_output_match = str(test_stdout).strip(' \n') == str(output_case).rstrip(' \n') # assume empty space and newline is not what the problem wants
 
                             # print(f"\n\nDEBUG: Running test case {i+1} with input={input_case}, output={output_case}\n\n")
                             # print(f"Test stdin: {test_stdin}")
