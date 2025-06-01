@@ -237,19 +237,16 @@ def execute_python_in_firejail(code: Union[str, List[str]], timeout: int=TIMEOUT
         stderr = result.stderr.strip()
         if stderr:
             has_error = True
-        
-        result = f"{stdout}\nError:\n{stderr}" if stderr else stdout
-        if result:
-            result = result.strip()
     except subprocess.TimeoutExpired:
         has_error = True
-        result = f"Execution timed out after {timeout} seconds.\n"
+        stdout = ""
+        stderr = f"Execution timed out after {timeout} seconds.\n"
     # Clean up the temporary file
     try:
         os.remove(file_path)
     except Exception as e:
         pass
-    return result, has_error
+    return stdout, stderr if stderr else "", has_error
 
 @register_tool
 class FirejailPythonCodeWithTestTool(BaseTool):
@@ -312,34 +309,6 @@ class FirejailPythonCodeWithTestTool(BaseTool):
         parsed_action, is_valid = self.parse_action(action)
         env = self.load_env(trajectory_id)
         
-        heuristic_sentences = {
-            "empty": [
-                "Hmm, no output at all. Since nothing broke, I'll draft a few edge-case inputs to see if the function ever emits data:",
-                "The run is silent—no errors, no text. I'll broaden the test suite and watch for any change in behaviour:",
-                "Blank output suggests the happy path passed; I'll now probe unusual parameters to confirm:",
-                "Nothing was printed, yet the call completed. Let me invent some stress tests to check hidden branches:",
-                "Zero output but no crash: time to craft randomized cases and observe whether output appears under different conditions:"
-            ], # normally when there is just a function of code, that's the coding question most of the time
-            "timeout": [
-                "The call never returned—likely stuck in a heavy loop. I'll scan the control flow and think about where it could stall.",
-                "Timeout reached. That hints at an expensive section or possible infinite recursion; I'll trace the algorithm paths and rethink them.",
-                "Execution exceeded the limit. I'll review the data size assumptions and consider simpler test inputs first.",
-                "Ran out of time—maybe I'm missing a termination condition. I'll inspect loops and add safeguards before retrying.",
-                "Process froze long enough to trigger a timeout; I'll look for bottlenecks and refactor the slow part."
-            ],
-            "error": [
-                "The code seems crashed. I'll read the stack trace, locate the failing line, and reason out a fix. Based on the error, I think",
-                "Wait, I got some errors of my previous code, I'll double-check code logic and try to fix the root cause. Based on the error, I think",
-                "Oops, the code crashed. I'll analyze the error message and see if I can fix it. Based on the error, I think",
-            ],
-            "success": [
-                "Code executed successfully! I'll cross-check it with expectations and decide if more cases are needed. Based on the output, I think",
-                "Now I have the execution result. After checking the output, I think",
-                "Good, the code run successfully without error. However, are there any more corner cases that didn't cover?",
-                "It looks like the code is working! But does this match my expected output?",
-            ]
-        }
-        
         if not is_valid:
             # observation = "No valid Python code found. Please provide code in either <python>...</python> tags or ```python...``` code blocks."
             observation = ""
@@ -347,202 +316,148 @@ class FirejailPythonCodeWithTestTool(BaseTool):
             done = False
             valid = False
         else:
+            code_has_error = False
             # Extract stdin if provided in extra_field
             stdin = extra_field.get("stdin", "") if extra_field else None
             
             test_input = re.findall(r"```input\n(.*?)\n```", action, re.DOTALL)
             if len(test_input) > 0:
                 stdin = test_input[0].strip()
-            
+
             new_code = parsed_action # 
             if self.enable_history_code_execution:
-                # Execute the code
-                # previous_parsed_code = [obs["action"] for obs in env["previous_obs"] if obs["is_valid"] and "error:" not in obs["observation"].lower()]
-                # code_to_execute = "\n".join(previous_parsed_code) + "\n" + parsed_action
-                # execution_result, has_error = execute_python_in_firejail(code_to_execute, self.timeout, stdin, self.python_path, self.pre_import_lib)
-                
                 previous_parsed_code = [obs["action"] for obs in env["previous_obs"]]
                 code_to_execute = wrap_code_blocks(previous_parsed_code + [parsed_action])
-                execution_result, has_error = execute_python_in_firejail(code_to_execute, self.timeout, stdin, self.python_path, self.pre_import_lib)
-                
-                # print("------")
-                # print(code_to_execute)
-                # print("------")
-                # print("------")
-                # print(execution_result)
-                # print("------")
-                # print("----") 
-                # print([obs["observation"] for obs in env["previous_obs"]])
-                # print("----")
-                # for previous_obs in env["previous_obs"]:
-                #     if previous_obs["is_valid"] and "error:" not in previous_obs["observation"].lower():
-                #         execution_result = execution_result.replace(previous_obs["observation"], "", 1)
+
             else:
                 code_to_execute = parsed_action
-                execution_result, has_error = execute_python_in_firejail(code_to_execute, self.timeout, stdin, self.python_path, self.pre_import_lib)
-                
-            execution_result = execution_result.lstrip(' \n')
-                        
-            # Format the result
-            if "Execution timed out" in execution_result:
-                observation = execution_result
-            else:
-                observation = f"{execution_result}"
-            
-            if action.endswith("```output"):
-                observation = "\n" + observation + "\n```\n"
-            elif action.endswith("</tool_call>"):
-                observation = "\n```output\n" + observation + "\n```\n"
-            elif action.endswith("<output>"):
-                observation = "\n" + observation + "\n</output>\n"
-            elif action.endswith("</python>") or "</python>" in action:
-                observation = "\n<output>\n" + observation + "\n</output>\n"
-            elif "<|calling system for feedback|>" in action:
-                if "```python" in action:
-                    observation = "\n```output\n" + observation + "\n```\n"
-                elif "<python>" in action:
-                    observation = "\n<output>\n" + observation + "\n</output>\n"
-                else:
-                    observation = "\n" + observation + "\n"
-            elif action.strip(' \n').endswith("```") or "```python" in action:
-                if action.count("```") % 2 == 0:
-                    observation = "\n```output\n" + observation + "\n```\n"
-                else:
-                    observation = "output\n" + observation + "\n```\n"
-            else:
-                observation = "\n" + observation + "\n"
-            
-            
-            # if not has_error and self.force_run_test_cases:
-            if self.force_run_test_cases:
-                observation = ""
-                test_cases = extra_field.get("public_tests", None) if extra_field else None
-                if test_cases:
-                    # print(test_cases)
-                    if isinstance(test_cases, str):
-                        test_cases = json.loads(test_cases) # [:10] # debug
-                    # execute the public test cases
-                    if isinstance(test_cases, list):
-                        # acecoder data
-                        # list of assert
-                        test_cases_code = "\n".join(test_cases)
-                        if test_cases_code in new_code:
-                            # already tested, pass
-                            test_result = ""
-                        else:
-                            test_codes = code_to_execute + "\n" + test_cases_code
-                            test_execution_result, has_error = execute_python_in_firejail(test_codes, self.timeout, stdin, self.python_path, self.pre_import_lib)
-                            test_execution_result = test_execution_result.replace(execution_result, "", 1)
-                            test_result = f"Testing the above code with the following test cases:\n```python\n{test_cases_code}\n```\n\nTest result:\n```output\n{test_execution_result}\n```\n"
-                            if not test_execution_result:
-                                test_result += "\nAll public test cases passed!\nSo the final code solution that is ready to submit is (copy the code above):\n```python\n"
-                            elif has_error:
-                                test_result += "\nOops, it seems one of the test cases failed and that means the code still has logical bugs."
-                            else:
-                                test_result += "\nI get the execution result and does the execution result match my expectations? Let me analyze one by one."
-                    elif isinstance(test_cases, dict):
-                        # deepcoder data
-                        assert "inputs" in test_cases and "outputs" in test_cases, f"Invalid test cases format: {test_cases.keys()}"
-                        test_result = ""
-                        test_cases_passed = True
-                        for i in range(len(test_cases["inputs"])):
-                            input_case = test_cases["inputs"][i]
-                            output_case = test_cases["outputs"][i]
-                            
-                            # print(f"\n\nDEBUG: Running test case {i+1} with input={input_case}, output={output_case}\n\n")
-                            
-                            if "fn_name" in test_cases:
-                                # if the test cases have a function name, we need to add it to the code
-                                assert isinstance(input_case, list), f"Invalid input case format: {input_case}"
-                                assert isinstance(output_case, list), f"Invalid output case format: {output_case}"
-                                input_arg = ", ".join([str(x) for x in input_case])
-                                expected_return = ", ".join([str(x) for x in output_case])
-                                if len(output_case) > 1:
-                                    expected_return = f"[{expected_return}]"
-                                test_codes = code_to_execute + f"\nassert {test_cases['fn_name']}({input_arg}) == {expected_return}\n"
-                                test_stdin = stdin
-                                test_execution_result, has_error = execute_python_in_firejail(test_codes, self.timeout, test_stdin, self.python_path, self.pre_import_lib)
-                                test_execution_result = test_execution_result.replace(execution_result, "", 1)
-                                if has_error:
-                                    test_cases_passed = False
-                            else:
-                            
-                                test_codes = code_to_execute
-                                test_stdin = (stdin + "\n" + input_case)
-                            
-                            
-                                test_execution_result, has_error = execute_python_in_firejail(test_codes, self.timeout, test_stdin, self.python_path, self.pre_import_lib)
-                                test_execution_result = test_execution_result.replace(execution_result, "", 1)
-                                test_case_output_match = str(test_execution_result) == str(output_case)
-                                
-                                # print(f"\n\nTest stdin: {test_stdin}")
-                                # print(f"Test case {i+1}: input={input_case}, output={output_case}")
-                                # print(f"\nTest Code: {test_codes}\n")
-                                # print(f"Test execution result: {test_execution_result}\n\n")
-                                
-                                if not test_case_output_match:
-                                    test_cases_passed = False
-                            
-                            message = ""
-                            
-                            # match non-passed generations
-                            if not test_cases_passed:
-                                metadata = {
-                                    "error": test_execution_result,
-                                    "inputs": input_case,
-                                    "expected": output_case,
-                                    "output": test_execution_result
-                                }
-                                
-                                # not runtime err or time-limit exceeded
-                                if not has_error:
-                                    # case: wrong answer
-                                    message = f"The above code is incorrect and got a wrong answer.\nInput: {metadata['inputs']}\nGenerated Output: {metadata['output']}\nExpected: {metadata['expected']}"
-                                else:
-                                    # time limit exceeded
-                                    if "execution timed out" in observation.lower():
-                                        message = f"The above code is incorrect and got time limit exceeded.\n{metadata['error']}\nInput: {metadata['inputs']}\nExpected: {metadata['expected']}"
-                                    elif "syntaxerror" in observation.lower():
-                                        message = f"The above code is incorrect and got a syntax error.\nInput: {metadata['inputs']}\nExpected: {metadata['expected']}\n{metadata['error']}"
-                                    else:
-                                        message = f"The above code is incorrect and got a runtime error.\nInput: {metadata['inputs']}\nExpected: {metadata['expected']}\n{metadata['error']}"
-                            test_result = message + "\n"
-                            
-                            if not test_cases_passed:
-                                break
-                        if test_cases_passed:
-                            test_result = "All public test cases passed!\n"
-                    else:
-                        raise ValueError(f"Invalid test cases format: {test_cases}")
-                    observation = test_result
-                    
-                    # print(f"\n\nObservation: {observation}")
+            # execution_result, has_error = execute_python_in_firejail(code_to_execute, self.timeout, stdin, self.python_path, self.pre_import_lib)
+            execution_result = ""
         
-                    
-            if self.enable_mannual_reflection:
-                # case: empty (correctly runned or the test case does not have output, need to check)
-                if execution_result == "":
-                    # randomly select a sentence from the empty heuristic sentences
-                    idx = random.randint(0, len(heuristic_sentences["empty"]) - 1)
-                    observation += heuristic_sentences["empty"][idx]
-                # case: execution timed out, need to check if the code is correct
-                elif "execution timed out" in observation.lower():
-                    # observation = execution_result
-                    idx = random.randint(0, len(heuristic_sentences["timeout"]) - 1)
-                    observation += heuristic_sentences["timeout"][idx]
-                # case: execution ends with error, need to look back and fix the bug
-                elif has_error:
-                    # observation = f"Execution completed with errors:\n{execution_result}"
-                    idx = random.randint(0, len(heuristic_sentences["error"]) - 1)
-                    observation += heuristic_sentences["error"][idx]     
-                # case: generated output without error, need to check the code's output
-                else:
-                    # observation = f"Execution result:\n{execution_result}"
-                    idx = random.randint(0, len(heuristic_sentences["success"]) - 1)
-                    observation += heuristic_sentences["success"][idx]
+            # if not has_error and self.force_run_test_cases:
+            observation = ""
+            test_cases = extra_field.get("public_tests", None) if extra_field else None
+            if self.force_run_test_cases and test_cases is not None:
+                # print(test_cases)
+                if isinstance(test_cases, str):
+                    test_cases = json.loads(test_cases) # [:10] # debug
+                # execute the public test cases
+                if isinstance(test_cases, list):
+                    # acecoder data
+                    # list of assert
+                    test_cases_code = "\n".join(test_cases)
+                    if test_cases_code in new_code:
+                        # already tested, pass
+                        test_result = ""
+                    else:
+                        test_codes = code_to_execute + "\n" + test_cases_code
+                        test_stdout, test_stderr, has_error = execute_python_in_firejail(test_codes, self.timeout, stdin, self.python_path, self.pre_import_lib)
+                        if not has_error:
+                            test_result = "\nAll public test cases passed!"
+                        else:
+                            test_result = f"Testing the above code with the following test cases:\n```python\n{test_cases_code}\n```\n\nTest result:\n```output\n{test_stdout}\n{test_stderr}\n```\n"
+                            test_result = f"The above code is incorrect: Error:\n{test_stderr}\n"
+                            code_has_error = True
+                elif isinstance(test_cases, dict):
+                    # deepcoder data
+                    assert "inputs" in test_cases and "outputs" in test_cases, f"Invalid test cases format: {test_cases.keys()}"
+                    test_result = ""
+                    test_cases_passed = True
+                    for i in range(len(test_cases["inputs"])):
+                        input_case = test_cases["inputs"][i]
+                        output_case = test_cases["outputs"][i]
+                        
+                        # print(f"\n\nDEBUG: Running test case {i+1} with input={input_case}, output={output_case}\n\n")
+                        
+                        if "fn_name" in test_cases:
+                            # if the test cases have a function name, we need to add it to the code
+                            assert isinstance(input_case, list), f"Invalid input case format: {input_case}"
+                            assert isinstance(output_case, list), f"Invalid output case format: {output_case}"
+                            input_arg = ", ".join([str(x) for x in input_case])
+                            expected_return = ", ".join([str(x) for x in output_case])
+                            if len(output_case) > 1:
+                                expected_return = f"[{expected_return}]"
+                            test_codes = code_to_execute + f"\nassert {test_cases['fn_name']}({input_arg}) == {expected_return}\n"
+                            test_stdin = stdin
+                            test_stdout, test_stderr, has_error = execute_python_in_firejail(test_codes, self.timeout, test_stdin, self.python_path, self.pre_import_lib)
+                            if has_error:
+                                test_cases_passed = False
+                        else:
+                        
+                            test_codes = code_to_execute
+                            test_stdin = (stdin + input_case)
+                            test_stdout, test_stderr, has_error = execute_python_in_firejail(test_codes, self.timeout, test_stdin, self.python_path, self.pre_import_lib)
+                            test_case_output_match = str(test_stdout).rstrip('\n') == str(output_case).rstrip('\n')
 
+                            # print(f"\n\nDEBUG: Running test case {i+1} with input={input_case}, output={output_case}\n\n")
+                            # print(f"Test stdin: {test_stdin}")
+                            # print("Test stdout:", json.dumps(test_stdout))
+                            # print("Test stderr:", test_stderr)
+                            # print("Has error:", has_error)
+                            # print("Expected output:", json.dumps(output_case))
+                            # print(f"Test case output match: {test_case_output_match}")
+                            
+                            if not test_case_output_match or has_error:
+                                test_cases_passed = False
+                        if not test_cases_passed:
+                            break
+                        
+                    message = ""
+                    
+                    # match non-passed generations
+                    if not test_cases_passed:
+                        metadata = {
+                            "error": test_stderr,
+                            "inputs": input_case,
+                            "expected": output_case,
+                            "output": test_stdout,
+                        }
+                        
+                        # not runtime err or time-limit exceeded
+                        if not has_error:
+                            # case: wrong answer
+                            message = f"The above code is incorrect and got a wrong answer.\nInput: {metadata['inputs']}\nGenerated Output: {metadata['output']}\nExpected: {metadata['expected']}"
+                        else:
+                            # time limit exceeded
+                            if "execution timed out" in observation.lower():
+                                message = f"The above code is incorrect and got time limit exceeded.\n{metadata['error']}\nInput: {metadata['inputs']}\nExpected: {metadata['expected']}"
+                            elif "syntaxerror" in observation.lower():
+                                message = f"The above code is incorrect and got a syntax error.\nInput: {metadata['inputs']}\nExpected: {metadata['expected']}\n{metadata['error']}"
+                            else:
+                                message = f"The above code is incorrect and got a runtime error.\nInput: {metadata['inputs']}\nExpected: {metadata['expected']}\n{metadata['error']}"
+                        test_result = message
+                        code_has_error = True
+                    else:
+                        test_result = "All public test cases passed!\n"
+                else:
+                    raise ValueError(f"Invalid test cases format: {test_cases}")
+                observation = test_result
+
+            # if action.endswith("```output"):
+            #     observation = "\n" + observation + "\n```\n"
+            # elif action.endswith("</tool_call>"):
+            #     observation = "\n```output\n" + observation + "\n```\n"
+            # elif action.endswith("<output>"):
+            #     observation = "\n" + observation + "\n</output>\n"
+            # elif action.endswith("</python>") or "</python>" in action:
+            #     observation = "\n<output>\n" + observation + "\n</output>\n"
+            # elif "<|calling system for feedback|>" in action:
+            #     if "```python" in action:
+            #         observation = "\n```output\n" + observation + "\n```\n"
+            #     elif "<python>" in action:
+            #         observation = "\n<output>\n" + observation + "\n</output>\n"
+            #     else:
+            #         observation = "\n" + observation + "\n"
+            # elif action.strip(' \n').endswith("```") or "```python" in action:
+            #     if action.count("```") % 2 == 0:
+            #         observation = "\n```output\n" + observation + "\n```\n"
+            #     else:
+            #         observation = "output\n" + observation + "\n```\n"
+            # else:
+            #     observation = "\n" + observation + "\n"
+                    
             if self.done_without_error:
-                if has_error:
+                if code_has_error:
                     done = False
                 else:
                     done = True
