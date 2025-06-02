@@ -94,28 +94,29 @@ def combined_int_check(val):
     return only_int_check(val) or string_int_check(val)
 
 
-# def clean_traceback(error_traceback):
-#     file_start = error_traceback.find('File "')
-#     error_traceback = "Traceback (most recent call last):\n  " + error_traceback[file_start:]
-#     return error_traceback
-
-import re
-
 def clean_traceback(error_traceback):
-    # Try to find the start of the traceback by locating the first 'File "' entry
-    file_start = error_traceback.find('File "')
-    if file_start != -1:
-        # Reconstruct the traceback from that point, adding a standard header
-        error_traceback = "Traceback (most recent call last):\n  " + error_traceback[file_start:]
+    file_start = error_traceback.find('File "<string>"')
+    # print(file_start)
+    error_traceback = "Traceback (most recent call last):\n  " + error_traceback[file_start:]
+    return error_traceback
 
-    # Use regex to extract only the final exception type and message, skipping all stack trace lines
-    match = re.search(r"Traceback \(most recent call last\):(?:.|\n)*?([a-zA-Z_][\w\.]*:.*)", error_traceback)
-    if match:
-        # Return only the exception type and message (e.g., TypeError: ...)
-        return match.group(1).strip()
-    else:
-        # If no traceback structure is detected, fallback to the last non-empty line
-        return error_traceback.strip().split('\n')[-1]
+# import re
+
+# def clean_traceback(error_traceback):
+#     # Try to find the start of the traceback by locating the first 'File "' entry
+#     file_start = error_traceback.find('File "')
+#     if file_start != -1:
+#         # Reconstruct the traceback from that point, adding a standard header
+#         error_traceback = "Traceback (most recent call last):\n  " + error_traceback[file_start:]
+
+#     # Use regex to extract only the final exception type and message, skipping all stack trace lines
+#     match = re.search(r"Traceback \(most recent call last\):(?:.|\n)*?([a-zA-Z_][\w\.]*:.*)", error_traceback)
+#     if match:
+#         # Return only the exception type and message (e.g., TypeError: ...)
+#         return match.group(1).strip()
+#     else:
+#         # If no traceback structure is detected, fallback to the last non-empty line
+#         return error_traceback.strip().split('\n')[-1]
 
 
 
