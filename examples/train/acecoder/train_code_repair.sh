@@ -14,7 +14,7 @@ val_data=[$(pwd)/data/${dataset_name2}/test.parquet]
 
 model_name=Qwen/Qwen2.5-Coder-1.5B-Instruct
 rl_alg=grpo # gae(ppo) or grpo, if grpo, then better set n>1 otherwise the group norm can not be effective
-n_gpus_per_node=4
+n_gpus_per_node=2
 n_nodes=1
 n=8
 batch_size=64

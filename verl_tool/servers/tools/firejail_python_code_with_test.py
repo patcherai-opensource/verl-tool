@@ -7,15 +7,10 @@ from .base import BaseTool, register_tool
 import regex as re
 import subprocess
 import os
-import signal
-import sys
 import json
 import uuid
-import hashlib
-import textwrap
+import numpy as np
 from typing import Tuple, Dict, Any, Optional, Union, List
-
-import random
 
 # Timeout for code execution in seconds
 TIMEOUT = 5
@@ -253,17 +248,54 @@ def stripped_string_compare(s1, s2):
     s2 = s2.strip()
     return s1 == s2
 
+def only_int_check(val):
+    return isinstance(val, int)
+
+def string_int_check(val):
+    return isinstance(val, str) and val.isdigit()
+
+def combined_int_check(val):
+    return only_int_check(val) or string_int_check(val)
+
 def custom_compare(output:str, expected:str):
-    output = output.splitlines()
-    if isinstance(output, list):
-        output_1 = "\n".join(output)
+    expected = str(expected)
+    output_lines = output.splitlines()
+    if isinstance(output_lines, list):
+        output_1 = "\n".join(output_lines)
         if stripped_string_compare(output_1, expected):
             return True
 
-        output_2 = [o.strip() for o in output]
+        # try remove extra space for each line in the output
+        output_2 = [o.strip() for o in output_lines]
         output_2 = "\n".join(output_2)
         if stripped_string_compare(output_2, expected):
             return True
+
+        # try remove extra space for each line in the expected
+        expected_lines = expected.splitlines()
+        expected_2 = [e.strip() for e in expected_lines]
+        expected_2 = "\n".join(expected_2)
+        if stripped_string_compare(output_2, expected_2):
+            return True
+
+        # check the ints and floats
+        output_lines = [o for o in output_lines if o.strip() != ""]
+        expected_lines = [e for e in expected.splitlines() if e.strip() != ""]
+        output_lines = [o.strip() for o in output_lines]
+        expected_lines = [e.strip() for e in expected_lines]
+        all_ints = all(
+            combined_int_check(e1) and combined_int_check(e2)
+            for e1, e2 in zip(output_lines, expected_lines) if e1 and e2
+        )
+        if not all_ints:
+            # check float
+            output_float = [float(e) for e in output]
+            gt_float = [float(e) for e in expected_lines]
+            tmp_result = (
+                (len(output_float) == len(gt_float)) and np.allclose(output_float, gt_float)
+            )
+            if tmp_result:
+                return True
     return False
 
 @register_tool
@@ -426,7 +458,7 @@ class FirejailPythonCodeWithTestTool(BaseTool):
                             test_case_output_match = custom_compare(test_stdout, expected_return)
                             if not test_case_output_match:
                                 test_cases_passed = False
-                                print(f"The above code is incorrect and got a wrong answer.\nInput: {input_case}\nGenerated Output: {test_stdout}\nExpected: {expected_return}")
+                                # print(f"The above code is incorrect and got a wrong answer.\nInput: {input_case}\nGenerated Output: {test_stdout}\nExpected: {expected_return}")
                         else:
                             # preprocess input case and output case
                             if isinstance(input_case, list):
