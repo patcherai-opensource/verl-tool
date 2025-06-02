@@ -428,9 +428,13 @@ class FirejailPythonCodeWithTestTool(BaseTool):
                                 test_cases_passed = False
                                 print(f"The above code is incorrect and got a wrong answer.\nInput: {input_case}\nGenerated Output: {test_stdout}\nExpected: {expected_return}")
                         else:
-                        
+                            # preprocess input case and output case
+                            if isinstance(input_case, list):
+                                input_case = "\n".join([str(x) for x in input_case if str(x).strip() != ""])
+                            if isinstance(output_case, list):
+                                output_case = "\n".join([str(x) for x in output_case if str(x).strip() != ""])
+
                             test_codes = code_to_execute
-                            # TODO: fix error: test_stdin = (stdin + input_case) TypeError: can only concatenate str (not "list") to str
                             test_stdin = (stdin + input_case)
                             test_stdout, test_stderr, has_error = execute_python_in_firejail(test_codes, self.timeout, test_stdin, self.python_path, self.pre_import_lib)
                             test_case_output_match = custom_compare(test_stdout, output_case)
