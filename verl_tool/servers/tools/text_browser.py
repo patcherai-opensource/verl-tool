@@ -241,7 +241,7 @@ class TextBrowserTool(BaseTool):
 
     def _cleanup_actors_if_needed(self):
         """Remove oldest actors if count exceeds limit."""
-        while len(self.env_actors) > 256:
+        while len(self.env_actors) > 512:
             # raise RuntimeError("Too many actors, please reduce the number of concurrent requests.")
             oldest = self.actor_creation_order.pop(0)
             print(f"[INFO] Deleting actor {oldest} due to too many actors.")

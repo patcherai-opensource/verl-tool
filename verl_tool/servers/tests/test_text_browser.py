@@ -50,7 +50,7 @@ def _send_test_request(url: str,
     logger.info("Payload:\n%s", json.dumps(payload, indent=2))
 
     try:
-        resp = requests.post(url, json=payload, timeout=30)
+        resp = requests.post(url, json=payload, timeout=120)
         resp.raise_for_status()
     except requests.exceptions.RequestException as e:
         logger.error("Request error: %s", e)

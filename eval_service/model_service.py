@@ -144,7 +144,7 @@ class ModelService:
                     if not isinstance(v, bool):
                         vllm_args.append(str(v))
         
-        host = "0.0.0.0"
+        host = "localhost"
         num_models = self.model_config.num_models
         ports = random.sample(range(8000, 9000), num_models)
         self.vllm_processes = []

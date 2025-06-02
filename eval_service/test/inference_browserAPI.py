@@ -68,17 +68,17 @@ def infer_one(row, client, model_name):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--data_path', type=str, default="/home/zhiheng/cogito/verl-tool/data/wikiQA_debug/test.parquet")
-    parser.add_argument('--result_dir', type=str, default="/home/zhiheng/cogito/verl-tool/eval_service/result")
+    parser.add_argument('--data_path', type=str, default="/minimax-dialogue/ruobai/cogito/verl-tool/data/wikiQA_debug/test.parquet")
+    parser.add_argument('--result_dir', type=str, default="/minimax-dialogue/ruobai/cogito/verl-tool/eval_service/result")
     parser.add_argument('--model_name', type=str, default="/home/zhiheng/cogito/base_models/qwen2.5-3b-baseline-step10")
     parser.add_argument('--api_port', type=int, default=5000)
     parser.add_argument('--api_key', type=str, default="sk-proj-1234567890")
-    parser.add_argument('--max_workers', type=int, default=16)
+    parser.add_argument('--max_workers', type=int, default=64)
     args = parser.parse_args()
 
     os.makedirs(args.result_dir, exist_ok=True)
     result_path = os.path.join(args.result_dir, f"{os.path.basename(args.model_name)}_result.csv")
-    client = OpenAI(api_key=args.api_key, base_url=f"http://0.0.0.0:{args.api_port}")
+    client = OpenAI(api_key=args.api_key, base_url=f"http://localhost:{args.api_port}")
 
     df = pd.read_parquet(args.data_path)
     if 'id' not in df.columns:
