@@ -88,13 +88,20 @@ class TaskRunner:
         processor = hf_processor(local_path, use_fast=True)  # used for multimodal LLM, could be none
 
         # define worker classes
-        if config.actor_rollout_ref.actor.strategy == 'fsdp':
+        if config.actor_rollout_ref.actor.strategy == 'fsdp' and config.actor_rollout_ref.rollout.mode == 'sync':
             assert config.actor_rollout_ref.actor.strategy == config.critic.strategy
             from verl.workers.fsdp_workers import ActorRolloutRefWorker, CriticWorker
             from verl.single_controller.ray import RayWorkerGroup
             ray_worker_group_cls = RayWorkerGroup
 
-        elif config.actor_rollout_ref.actor.strategy == 'fsdp_agent':
+        elif config.actor_rollout_ref.actor.strategy == 'fsdp' and config.actor_rollout_ref.rollout.mode == 'async':
+            assert config.actor_rollout_ref.actor.strategy == config.critic.strategy
+            from verl_tool.agent_workers.fsdp_workers import AsyncActorRolloutRefWorker as ActorRolloutRefWorker
+            from verl.workers.fsdp_workers import CriticWorker
+            from verl.single_controller.ray import RayWorkerGroup
+            ray_worker_group_cls = RayWorkerGroup
+
+        elif config.actor_rollout_ref.actor.strategy == 'fsdp_agent': # TODO: have problems in `build_optimizer` use `fsdp` instead
             assert config.actor_rollout_ref.actor.strategy == config.critic.strategy
             from verl_tool.agent_workers.fsdp_workers import AgentActorRolloutRefWorker as ActorRolloutRefWorker
             from verl.workers.fsdp_workers import CriticWorker

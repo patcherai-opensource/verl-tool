@@ -4,6 +4,8 @@ from .metric_utils import (
     agent_compute_data_metrics as compute_data_metrics,
     compute_timing_metrics,
 )
+# from verl_tool.agent_workers.async_server import AsyncLLMServerManager # TODO: problem why?
+from verl.workers.rollout.async_server import AsyncLLMServerManager
 from tqdm import tqdm
 
 
@@ -188,7 +190,12 @@ class AgentRayPPOTrainer(RayPPOTrainer):
 
             # pad to be divisible by dp_size
             test_gen_batch_padded, pad_size = pad_dataproto_to_divisor(test_gen_batch, self.actor_rollout_wg.world_size)
-            test_output_gen_batch_padded = self.actor_rollout_wg.generate_sequences(test_gen_batch_padded)
+            if not self.async_rollout_mode:
+                test_output_gen_batch_padded = self.actor_rollout_wg.generate_sequences(test_gen_batch_padded)
+            else:
+                self.async_rollout_manager.wake_up()
+                test_output_gen_batch_padded = self.async_rollout_manager.generate_sequences(test_gen_batch_padded)
+                self.async_rollout_manager.sleep()
 
             # unpad
             test_output_gen_batch = unpad_dataproto(test_output_gen_batch_padded, pad_size=pad_size)
@@ -284,6 +291,7 @@ class AgentRayPPOTrainer(RayPPOTrainer):
                 timing_raw = {}
 
                 batch: DataProto = DataProto.from_single_dict(batch_dict)
+                print(f'batch: {batch}')
 
                 # pop those keys for generation
                 if 'multi_modal_inputs' in batch.non_tensor_batch.keys():
@@ -296,7 +304,7 @@ class AgentRayPPOTrainer(RayPPOTrainer):
                         batch_keys=['input_ids', 'attention_mask', 'position_ids'],
                         non_tensor_batch_keys=['raw_prompt_ids']
                     )
-                if 'agent' in self.config.actor_rollout_ref.actor.strategy:
+                if 'agent' in self.config.actor_rollout_ref.actor.strategy: # TODO: update
                     additional_non_tensor_keys = ['extra_info']
                     additional_non_tensor_keys = [k for k in additional_non_tensor_keys if k in batch.non_tensor_batch.keys()]
                     for key in additional_non_tensor_keys:
@@ -307,8 +315,14 @@ class AgentRayPPOTrainer(RayPPOTrainer):
 
                 with _timer('step', timing_raw):
                     # generate a batch
-                    with _timer('gen', timing_raw):
-                        gen_batch_output = self.actor_rollout_wg.generate_sequences(gen_batch)
+                    with _timer("gen", timing_raw):
+                        if not self.async_rollout_mode:
+                            gen_batch_output = self.actor_rollout_wg.generate_sequences(gen_batch)
+                        else:
+                            print(f'gen_batch: {gen_batch}') # TODO: delete
+                            self.async_rollout_manager.wake_up()
+                            gen_batch_output = self.async_rollout_manager.generate_sequences(gen_batch)
+                            self.async_rollout_manager.sleep()
 
                     if self.config.algorithm.adv_estimator == AdvantageEstimator.REMAX:
                         with _timer('gen_max', timing_raw):
