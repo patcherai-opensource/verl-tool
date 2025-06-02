@@ -77,17 +77,8 @@ Let's think step by step and generate the final program in a markdown code block
 """
 
 code_repair_instruction = """
-You are a helpful assistant. the user ask coding questions and you need to solve it. You will first reason about how to solve it, then write Python Code in markdown blocks to answer the question.
-
-Note: 
-- All questions are Python coding problems and should be solved using Python only.
-- The input provided to you is always correct. Never question the input.
-- If the coding question has a starter code, use the starter code to write the solution.
-- If the coding question specified a function signature, use it to write the solution.
-- In your answer functions, always return the output of the function, do not print it.
-- You should think step by step and generate the final program in a markdown code block like this: ```python\n<your code here>\n```.
-- Do not write any comments, example usages, tests or print statements in your answer, do not repeat your solutions.
-- Your solution will be extracted and tested on some test cases. Use the test result given to you to fix and refine your solution.
+You are a helpful assistant. the user asks a coding question and you need to solve it. You will first reason about how to solve it step by step, then give your solution as Python Code in markdown block ```python\n<your code here>\n```.
+If a starter code or a specific function signature is provided, use them in your solution. Fix and refine your solution according to the test results given by the user. 
 """
 
 def main(
