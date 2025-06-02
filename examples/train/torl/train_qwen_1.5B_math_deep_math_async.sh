@@ -1,9 +1,9 @@
-# no tool version 
 export WANDB_API_KEY="206bfb00f2ea3ace5584800c219dfc894e981bc3"
 export https_proxy="http://100.64.117.161:3128"
-export CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7
+export CUDA_VISIBLE_DEVICES=0,1,6,7
+export VLLM_USE_V1=1
 set -x
-dataset_name=deep_math_wo_tool # or math_torl_offical to use torl training data
+dataset_name=deep_math_tool_v9 # or math_torl_offical to use torl training data
 train_data=$(pwd)/data/${dataset_name}/train.parquet
 val_data=[$(pwd)/data/${dataset_name}/test.parquet,\
 $(pwd)/data/${dataset_name}/math500_test.parquet,\
@@ -11,7 +11,7 @@ $(pwd)/data/${dataset_name}/aime24_test.parquet,\
 $(pwd)/data/${dataset_name}/aime25_test.parquet]
 model_name=/map-vepfs/models/Qwen2.5-Math-1.5B
 rl_alg=grpo # gae(ppo) or grpo, if grpo, then better set n>1 otherwise the group norm can not be effective
-n_gpus_per_node=8
+n_gpus_per_node=4
 n_nodes=1
 n=16
 batch_size=128
@@ -22,7 +22,7 @@ max_obs_length=512
 temperature=1.0
 top_p=1.0
 strategy="fsdp" # remove _agent for normal verl behavior
-action_stop_tokens='<|calling system for feedback|>,```output'
+action_stop_tokens='```output'
 max_turns=1
 kl_loss_coef=0.0
 kl_coef=0
@@ -33,15 +33,15 @@ reward_manager=torl
 ppo_micro_batch_size_per_gpu=1
 log_prob_micro_batch_size_per_gpu=8
 tensor_model_parallel_size=2
-gpu_memory_utilization=0.8 # higher gpu_memory_utilization will likely cause the vllm to OOM and get stuck, so set it to a lower value like 0.4 or 0.5
+gpu_memory_utilization=0.6 # higher gpu_memory_utilization will likely cause the vllm to OOM and get stuck, so set it to a lower value like 0.4 or 0.5
 do_offload=True # control actor's fsdp.[param|optimizer]_offload and actor_rollout_ref.rollout.fsdp.[param|optimizer]_offload; if gpu_memory_utilization is set to > 0.6, then do_offload should be set to True otherwise it will cause OOM
 use_dynamic_bsz=True # faster
 ulysses_sequence_parallel_size=1 # set to 1 for normal verl behavior, otherwise it will cause OOM
 fsdp_size=-1
 additional_eos_token_ids=[151645] # <|im_end|> token id
 mask_observations=True # mask observations for kl loss and gradient descent
-enable_mtrl=True # enable multi-turn training
-max_action_length=1536
+enable_mtrl=False # enable multi-turn training
+max_action_length=2048
 
 model_pretty_name=$(echo $model_name | tr '/' '_' | tr '[:upper:]' '[:lower:]')
 run_name="${reward_manager}-${strategy}-${model_pretty_name}-${rl_alg}-n${n}-b${batch_size}-t${temperature}-lr${lr}${run_name_postfix}"
@@ -54,6 +54,13 @@ action_stop_tokens_file="$(pwd)$(mktemp)"
 echo -e -n "$action_stop_tokens" | tee $action_stop_tokens_file
 echo "action_stop_tokens_file=$action_stop_tokens_file"
 
+host=$(hostname -I | awk '{print $1}')
+port=$(shuf -i 30000-31000 -n 1)
+tool_server_url=http://$host:$port/get_observation
+python -m verl_tool.servers.serve --host $host --port $port --tool_type "python_code" --workers_per_tool 8 &
+server_pid=$!
+
+echo "Server (pid=$server_pid) started at $tool_server_url"
 
 PYTHONUNBUFFERED=1 python3 -m verl_tool.trainer.main_ppo \
     algorithm.adv_estimator=$rl_alg \
@@ -68,7 +75,7 @@ PYTHONUNBUFFERED=1 python3 -m verl_tool.trainer.main_ppo \
     actor_rollout_ref.model.path=$model_name \
     actor_rollout_ref.model.enable_gradient_checkpointing=True \
     actor_rollout_ref.actor.optim.lr=$lr \
-	actor_rollout_ref.actor.optim.lr_warmup_steps=10 \
+    actor_rollout_ref.actor.optim.lr_warmup_steps=10 \
     actor_rollout_ref.model.use_remove_padding=True \
     +actor_rollout_ref.model.trust_remote_code=True \
     actor_rollout_ref.actor.checkpoint.contents=['model','optimizer','extra','hf_model'] \
@@ -84,6 +91,18 @@ PYTHONUNBUFFERED=1 python3 -m verl_tool.trainer.main_ppo \
     actor_rollout_ref.actor.fsdp_config.optimizer_offload=$do_offload \
     actor_rollout_ref.actor.fsdp_config.fsdp_size=$fsdp_size \
     actor_rollout_ref.actor.ulysses_sequence_parallel_size=$ulysses_sequence_parallel_size \
+    +actor_rollout_ref.agent.tool_server_url=$tool_server_url \
+    +actor_rollout_ref.agent.max_prompt_length=$max_prompt_length \
+    +actor_rollout_ref.agent.max_response_length=$max_response_length \
+    +actor_rollout_ref.agent.max_start_length=$max_prompt_length \
+    +actor_rollout_ref.agent.max_obs_length=$max_obs_length \
+    +actor_rollout_ref.agent.max_turns=$max_turns \
+    +actor_rollout_ref.agent.num_gpus=$n_gpus_per_node \
+    +actor_rollout_ref.agent.additional_eos_token_ids=$additional_eos_token_ids \
+    +actor_rollout_ref.agent.mask_observations=$mask_observations \
+    +actor_rollout_ref.agent.action_stop_tokens=$action_stop_tokens_file \
+    +actor_rollout_ref.agent.enable_mtrl=$enable_mtrl \
+    +actor_rollout_ref.agent.max_action_length=$max_action_length \
     actor_rollout_ref.rollout.tensor_model_parallel_size=$tensor_model_parallel_size \
     actor_rollout_ref.rollout.log_prob_micro_batch_size_per_gpu=$log_prob_micro_batch_size_per_gpu \
     actor_rollout_ref.rollout.enforce_eager=False \
@@ -96,6 +115,8 @@ PYTHONUNBUFFERED=1 python3 -m verl_tool.trainer.main_ppo \
     actor_rollout_ref.rollout.n=$n \
     actor_rollout_ref.rollout.log_prob_use_dynamic_bsz=$use_dynamic_bsz \
     actor_rollout_ref.rollout.max_num_seqs=512 \
+    actor_rollout_ref.rollout.mode=async \
+    actor_rollout_ref.rollout.chat_scheduler=verl_tool.agent_workers.tool_chat_completion_scheduler.NaiveChatCompletionScheduler \
     actor_rollout_ref.ref.log_prob_use_dynamic_bsz=$use_dynamic_bsz \
     actor_rollout_ref.ref.fsdp_config.param_offload=$do_offload \
     actor_rollout_ref.ref.log_prob_micro_batch_size_per_gpu=$log_prob_micro_batch_size_per_gpu \
@@ -110,14 +131,15 @@ PYTHONUNBUFFERED=1 python3 -m verl_tool.trainer.main_ppo \
     trainer.logger=['console','wandb'] \
     trainer.project_name=$reward_manager \
     trainer.experiment_name=$run_name \
-    trainer.val_before_train=True \
+    trainer.val_before_train=False \
     trainer.default_hdfs_dir=null \
     trainer.n_gpus_per_node=$n_gpus_per_node \
     trainer.nnodes=$n_nodes \
+    +trainer.remove_previous_ckpt_in_save=False \
     trainer.save_freq=10 \
     trainer.test_freq=10 \
     trainer.total_epochs=10 \
-    2>&1 | tee tmp.log
+    trainer.resume_mode=disable
 
 
 # pkill -P -9 $server_pid
