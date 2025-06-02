@@ -287,15 +287,18 @@ def custom_compare(output:str, expected:str):
             combined_int_check(e1) and combined_int_check(e2)
             for e1, e2 in zip(output_lines, expected_lines) if e1 and e2
         )
-        if not all_ints:
-            # check float
-            output_float = [float(e) for e in output]
-            gt_float = [float(e) for e in expected_lines]
-            tmp_result = (
-                (len(output_float) == len(gt_float)) and np.allclose(output_float, gt_float)
-            )
-            if tmp_result:
-                return True
+        try:
+            if not all_ints:
+                # check float
+                output_float = [float(e) for e in output]
+                gt_float = [float(e) for e in expected_lines]
+                tmp_result = (
+                    (len(output_float) == len(gt_float)) and np.allclose(output_float, gt_float)
+                )
+                if tmp_result:
+                    return True
+        except:
+            pass
     return False
 
 @register_tool
@@ -433,7 +436,7 @@ class FirejailPythonCodeWithTestTool(BaseTool):
                                 elif isinstance(output_case, list):
                                     expected_return = ", ".join([str(x) for x in output_case])
                                     if len(output_case) > 1:
-                                        expected_return = f"[{expected_return}]"
+                                        expected_return = f"({expected_return})"
                                 else:
                                     raise ValueError(f"Invalid output case format: {output_case}")
                             elif isinstance(input_case, list):
@@ -443,7 +446,7 @@ class FirejailPythonCodeWithTestTool(BaseTool):
                                 elif isinstance(output_case, list):
                                     expected_return = ", ".join([str(x) for x in output_case])
                                     if len(output_case) > 1:
-                                        expected_return = f"[{expected_return}]"
+                                        expected_return = f"({expected_return})" # men_still_standing([]) == [11,11]
                                 else:
                                     raise ValueError(f"Invalid output case format: {output_case}")
                             else:
@@ -481,6 +484,7 @@ class FirejailPythonCodeWithTestTool(BaseTool):
                             
                             if not test_case_output_match or has_error:
                                 test_cases_passed = False
+                                # print(f"The above code is incorrect and got a wrong answer.\nInput: {input_case}\nGenerated Output: {test_stdout}\nExpected: {expected_return}")
                         if not test_cases_passed:
                             break
                         
