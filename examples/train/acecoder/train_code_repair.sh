@@ -63,8 +63,8 @@ echo "action_stop_tokens_file=$action_stop_tokens_file"
 host=$(hostname -I | awk '{print $1}')
 port=$(shuf -i 30000-31000 -n 1)
 tool_server_url=http://$host:$port/get_observation
-# python -m verl_tool.servers.serve --host $host --port $port --tool_type "firejail_python_code_with_test" --workers_per_tool 4 --done_if_invalid True &
-python -m verl_tool.servers.serve --host $host --port $port --tool_type "firejail_python_code_with_verl_code_test" --workers_per_tool 4 --done_if_invalid True &
+python -m verl_tool.servers.serve --host $host --port $port --tool_type "firejail_python_code_with_test" --workers_per_tool 4 --done_if_invalid True &
+# python -m verl_tool.servers.serve --host $host --port $port --tool_type "firejail_python_code_with_verl_code_test" --workers_per_tool 4 --done_if_invalid True &
 server_pid=$!
 echo "Server (pid=$server_pid) started at $tool_server_url"
 

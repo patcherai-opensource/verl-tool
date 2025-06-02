@@ -428,4 +428,7 @@ def check_correctness(in_outs: Optional[dict], generation, timeout=5, debug=True
         result = [[-1 for i in range(len(in_outs["inputs"]))]]
         if debug:
             print("global timeout")
+        
+        metadata_list = {"error_code": -1, "traceback": "global timeout", "inputs": [], "output": "", "expected": ""}
+            
     return result[0], metadata_list
