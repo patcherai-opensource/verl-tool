@@ -484,7 +484,7 @@ class FirejailPythonCodeWithTestTool(BaseTool):
                             
                             if not test_case_output_match or has_error:
                                 test_cases_passed = False
-                                # print(f"The above code is incorrect and got a wrong answer.\nInput: {input_case}\nGenerated Output: {test_stdout}\nExpected: {expected_return}")
+                                # print(f"The above code is incorrect and got a wrong answer.\nInput: {input_case}\nGenerated Output: {test_stdout}\nExpected: {output_case}")
                         if not test_cases_passed:
                             break
                         
