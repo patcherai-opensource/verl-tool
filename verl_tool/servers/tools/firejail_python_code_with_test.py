@@ -249,22 +249,21 @@ def execute_python_in_firejail(code: Union[str, List[str]], timeout: int=TIMEOUT
     return stdout, (stderr if stderr else ""), has_error
 
 def stripped_string_compare(s1, s2):
-    s1 = s1.lstrip().rstrip()
-    s2 = s2.lstrip().rstrip()
+    s1 = s1.strip()
+    s2 = s2.strip()
     return s1 == s2
 
-def custom_compare_(output, ground_truth):
+def custom_compare(output:str, expected:str):
+    output = output.splitlines()
     if isinstance(output, list):
         output_1 = "\n".join(output)
-        if stripped_string_compare(output_1, ground_truth):
+        if stripped_string_compare(output_1, expected):
             return True
 
-    if isinstance(output, list):
-        output_2 = [o.lstrip().rstrip() for o in output]
+        output_2 = [o.strip() for o in output]
         output_2 = "\n".join(output_2)
-        if stripped_string_compare(output_2, ground_truth):
+        if stripped_string_compare(output_2, expected):
             return True
-
     return False
 
 @register_tool
@@ -418,26 +417,23 @@ class FirejailPythonCodeWithTestTool(BaseTool):
                             else:
                                 raise ValueError(f"Invalid input case format: {input_case}")
                               
-                            # test_codes = code_to_execute + f"\nassert {test_cases['fn_name']}({input_arg}) == {expected_return}\n"
-                            test_codes = code_to_execute
+                            test_codes = code_to_execute + f"\nassert {test_cases['fn_name']}({input_arg}) == {expected_return}\n"
+                            test_codes = code_to_execute + f"\nprint({test_cases['fn_name']}({input_arg}))\n"
                             
                             test_stdin = stdin
                             test_stdout, test_stderr, has_error = execute_python_in_firejail(test_codes, self.timeout, test_stdin, self.python_path, self.pre_import_lib)
-                            
                             # debug
-                            if not custom_compare_(test_stdout, expected_return):
+                            test_case_output_match = custom_compare(test_stdout, expected_return)
+                            if not test_case_output_match:
                                 test_cases_passed = False
                                 print(f"The above code is incorrect and got a wrong answer.\nInput: {input_case}\nGenerated Output: {test_stdout}\nExpected: {expected_return}")
-                            
-                            if has_error:
-                                test_cases_passed = False
                         else:
                         
                             test_codes = code_to_execute
                             # TODO: fix error: test_stdin = (stdin + input_case) TypeError: can only concatenate str (not "list") to str
                             test_stdin = (stdin + input_case)
                             test_stdout, test_stderr, has_error = execute_python_in_firejail(test_codes, self.timeout, test_stdin, self.python_path, self.pre_import_lib)
-                            test_case_output_match = str(test_stdout).strip(' \n') == str(output_case).strip(' \n') # assume empty space and newline is not what the problem wants
+                            test_case_output_match = custom_compare(test_stdout, output_case)
 
                             # print(f"\n\nDEBUG: Running test case {i+1} with input={input_case}, output={output_case}\n\n")
                             # print(f"Test stdin: {test_stdin}")
