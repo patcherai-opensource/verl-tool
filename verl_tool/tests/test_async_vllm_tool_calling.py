@@ -159,8 +159,7 @@ class ToolChatCompletionScheduler(NaiveChatCompletionScheduler):
             temperature=self.config.temperature,
             top_p=self.config.top_p,
             include_stop_str_in_output=True, # TODO: config
-            stop=self.agent_config.action_stop_tokens, # TODO: check VLLM stop token
-            # TODO: `stop_token_ids, detokenize`
+            stop=self.agent_config.action_stop_tokens, 
             # extra_body={
             # },
         )
@@ -335,7 +334,6 @@ def test_vllm_tool_calling():
             "raw_prompt": np.array(raw_prompt),
         },
     )
-
     result = async_rollout_manager.generate_sequences(prompts=gen_batch)
     print(result)
 
