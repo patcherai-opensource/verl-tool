@@ -56,6 +56,7 @@ class NaiveChatCompletionScheduler(ChatCompletionScheduler):
         # TODO: we may need to control max concurrent requests here, or it will harm prefix cache hit rate.
         tasks, batch_conversations = [], [None] * len(batch)
         for batch_index, conversation in enumerate(batch.non_tensor_batch["raw_prompt"]):
+            # TODO: use `semaphore` to control max concurrent requests
             # raw_prompt: [{"role": "user", "content": ""}, ["role": "assistant", "content"], ...]
             tasks.append(
                 asyncio.create_task(
@@ -78,6 +79,7 @@ class NaiveChatCompletionScheduler(ChatCompletionScheduler):
         return self._postprocess(batch, batch_conversations, kwargs["n"])
 
     def _postprocess(self, batch: DataProto, batch_conversations: List[List[List[Dict[str, str]]]], n: int) -> DataProto:
+        # TODO: check here tool tokens
         # NOTE: consistent with batch version of generate_sequences in vllm_rollout_spmd.py
         # prompts: left pad
         # responses: right pad
@@ -86,7 +88,7 @@ class NaiveChatCompletionScheduler(ChatCompletionScheduler):
         # position_ids:   [0,0,0,0,0,1,2,3, | 4,5,6,7,8,9,10,11]
 
         # prompts: [prompt] from input dataset
-        prompts = [self.tokenizer.apply_chat_template(prompt, add_generation_prompt=True, tokenize=False) for prompt in batch.non_tensor_batch["raw_prompt"]]
+        prompts = [self.tokenizer.apply_chat_template(prompt, add_generation_prompt=True, tokenize=False) for prompt in batch.non_tensor_batch["raw_prompt"]] 
 
         # flatten batch_conversations if n > 1
         assert len(batch_conversations) == len(prompts)

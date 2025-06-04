@@ -22,14 +22,8 @@ import datasets
 from verl.utils.hdfs_io import copy, makedirs
 import argparse
 
-
-def extract_solution(solution_str):
-    solution = re.search("#### (\\-?[0-9\\.\\,]+)", solution_str)
-    assert solution is not None
-    final_solution = solution.group(0)
-    final_solution = final_solution.split('#### ')[1].replace(',', '')
-    return final_solution
-
+system_prompt = '''A conversation between User and Assistant. The user asks a question, and the Assistant solves it. Please integrate natural language reasoning with programs to solve the problem above, and put your final answer within \\boxed{}.:
+'''
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
@@ -53,10 +47,16 @@ if __name__ == '__main__':
             solution = None
             data = {
                 "data_source": data_source,
-                "prompt": [{
-                    "role": "user",
-                    "content": question,
-                }],
+                "prompt": [
+                    {
+                        "role": "system",
+                        "content": system_prompt
+                    },
+                    {
+                        "role": "user",
+                        "content": question,
+                    }
+                ],
                 "ability": "math",
                 "reward_model": {
                     "style": "rule",
