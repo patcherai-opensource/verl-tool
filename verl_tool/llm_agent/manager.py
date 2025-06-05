@@ -680,6 +680,76 @@ class AgentActorManager:
                 padding_side='right'
             ) # [bs*n, max_response_length]
 
+        # <<<yilu insertion
+        # ---------- optional: only keep response length in last llm-response ----------
+        # temporarily fix
+        # if getattr(self.config, "only_keep_last_llm_response", False):
+        if True:
+            # print(f"[DEBUG] info mask shape: {final_output['info_mask'].shape}")
+            
+            # first get a temporary mask which mask-out padded tokens with 0 for responses_with_info_mask
+            tmp_info_mask = self.tensor_fn.create_attention_mask(final_output['responses_with_info_mask'])
+            # then crop the last turns' indices for each sample in the batch
+            info_mask_only_last_turn = torch.zeros_like(tmp_info_mask, dtype=torch.int64)
+            
+            num_batches = tmp_info_mask.shape[0]
+            for i in range(num_batches):
+                curr_mask = tmp_info_mask[i]  # 1D: [seq_len]
+                # find all non-zero positions
+                nonzero_idxs = torch.nonzero(curr_mask, as_tuple=False)
+                if nonzero_idxs.numel() == 0:
+                    # no non-zero entries at all: leave this batch row as all zeros
+                    continue
+                # last non-zero index
+                last_nz = nonzero_idxs[-1].item()
+                # walk backwards to find the start of that contiguous block
+                start_nz = last_nz
+                while start_nz > 0 and curr_mask[start_nz - 1] != 0:
+                    start_nz -= 1
+                # copy exactly that slice [start_nz : last_nz+1] into the new mask
+                info_mask_only_last_turn[i, start_nz : last_nz + 1] = curr_mask[start_nz : last_nz + 1]
+            # based on the modified tmp_info_masks, modify the responses_with_info_mask
+            # mask the responses_with_info_mask with padding_token to only keep the last turn
+            pad_id = self.tokenizer.pad_token_id
+            
+            # mask the final_output['responses_with_info_mask']'s masked locations to pad_id
+            final_output['responses_with_info_mask'] = torch.where(
+                info_mask_only_last_turn == 1,
+                final_output['responses_with_info_mask'],
+                torch.full_like(final_output['responses_with_info_mask'], pad_id, dtype=torch.int64)
+            )     
+            sorted_indices = tmp_info_mask.to(torch.int64).argsort(dim=1, stable=True)
+            final_output['responses_with_info_mask'] = final_output['responses_with_info_mask'].gather(1, sorted_indices)
+            
+            # overwrite the original info_mask so that only the last turn remains
+            # final_output['responses_with_info_mask'] = info_mask_only_last_turn
+            # modify the final_output['responses_with_info_mask'] to match the new info_mask
+            
+        # DEBUG: print the shape of the new info_mask, attn_mask, response, response_with_info_mask
+        # try:
+        #     # print(f"[DEBUG] info mask only last turn shape: {final_output['info_mask'].shape}")
+        #     # print(f"[DEBUG] attention mask shape: {final_output['attention_mask'].shape}")
+        #     print(f"[DEBUG] responses shape: {final_output['responses'].shape}")
+        #     print(f"[DEBUG] responses_with_info_mask shape: {final_output['responses_with_info_mask'].shape}")
+            
+        #     # decode the first response to check if it is correct
+        #     if final_output['responses'].shape[0] > 0:
+        #         first_response = final_output['responses'][0]
+        #         decoded_response = self.tokenizer.decode(first_response, skip_special_tokens=True)
+        #         print(f"[DEBUG] First response (decoded): {decoded_response}")
+            
+        #         # remove the input parts
+        #         # tmp_info_mask = final_output['info_mask'][0]
+                
+        #         # print out the non-masked parts in the response
+        #         # first_response_masked = first_response[tmp_info_mask == 1]
+        #         first_response_masked = final_output['responses_with_info_mask'][0]
+        #         decoded_masked_response = self.tokenizer.decode(first_response_masked, skip_special_tokens=True)
+        #         print(f"[DEBUG] First response (masked, decoded): {decoded_masked_response}")
+        # except:
+        #     print("[DEBUG] Failed to print shapes of final output tensors, likely due to missing keys.")
+        # <<< end of yilu insertion
+
         # Combine input IDs
         final_output['input_ids'] = torch.cat([
             left_side['input_ids'],
@@ -705,11 +775,10 @@ class AgentActorManager:
         final_output['position_ids'] = self.tensor_fn.create_position_ids(
             final_output['attention_mask']
         ) # [bs*n, prompt_length + max_response_length]
-
         # ---------- 3. Create and return DataProto ----------
         final_output = DataProto.from_dict(final_output, non_tensors=non_tensors)
         final_output.meta_info.update(meta_info)
-
+            
         return final_output
 
     def send_batch_requests(self, batch_data: Dict[str, Any]) -> Dict[str, Any]:

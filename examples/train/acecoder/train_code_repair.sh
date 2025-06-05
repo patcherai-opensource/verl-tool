@@ -12,12 +12,13 @@ dataset_name2=deepcoder/all-with-execution-prompt-with-public-tests-complex
 train_data=[$(pwd)/data/${dataset_name2}/train.parquet]
 val_data=[$(pwd)/data/${dataset_name2}/test.parquet]
 
-model_name=Qwen/Qwen2.5-Coder-1.5B-Instruct
+# model_name=Qwen/Qwen2.5-Coder-1.5B-Instruct
+model_name="/map-vepfs/yi/model_weights/Qwen2.5-Coder-1.5B-Instruct"
 rl_alg=grpo # gae(ppo) or grpo, if grpo, then better set n>1 otherwise the group norm can not be effective
-n_gpus_per_node=2
+n_gpus_per_node=8
 n_nodes=1
 n=8
-batch_size=256
+batch_size=128
 ppo_mini_batch_size=$batch_size
 max_prompt_length=1536
 max_response_length=3072
@@ -38,9 +39,9 @@ lr=1e-6
 reward_manager=acecoder
 ppo_micro_batch_size_per_gpu=1
 log_prob_micro_batch_size_per_gpu=8
-tensor_model_parallel_size=2
+tensor_model_parallel_size=1    # 2
 gpu_memory_utilization=0.5 # higher gpu_memory_utilization will likely cause the vllm to OOM and get stuck, so set it to a lower value like 0.4 or 0.5
-do_offload=True # control actor's fsdp.[param|optimizer]_offload and actor_rollout_ref.rollout.fsdp.[param|optimizer]_offload; if gpu_memory_utilization is set to > 0.6, then do_offload should be set to True otherwise it will cause OOM
+do_offload=False # control actor's fsdp.[param|optimizer]_offload and actor_rollout_ref.rollout.fsdp.[param|optimizer]_offload; if gpu_memory_utilization is set to > 0.6, then do_offload should be set to True otherwise it will cause OOM
 use_dynamic_bsz=True # faster
 ulysses_sequence_parallel_size=1 # set to 1 for normal verl behavior, otherwise it will cause OOM
 fsdp_size=-1
@@ -49,7 +50,7 @@ max_action_length=1536
 
 
 model_pretty_name=$(echo $model_name | tr '/' '_' | tr '[:upper:]' '[:lower:]')
-run_name_postfix="-69k-sys12-code-repair"
+run_name_postfix="-deepcoder-sysrepair-code-repair"
 run_name="${reward_manager}-${strategy}-${model_pretty_name}-${rl_alg}-n${n}-b${batch_size}-t${temperature}-lr${lr}${run_name_postfix}"
 export VERL_RUN_ID=$run_name
 export NCCL_DEBUG=INFO
@@ -79,7 +80,7 @@ PYTHONUNBUFFERED=1 python3 -m verl_tool.trainer.main_ppo \
     data.truncation='right' \
     reward_model.reward_manager=$reward_manager \
     actor_rollout_ref.model.path=$model_name \
-    actor_rollout_ref.model.enable_gradient_checkpointing=True \
+    actor_rollout_ref.model.enable_gradient_checkpointing=False \
     actor_rollout_ref.actor.optim.lr=$lr \
     actor_rollout_ref.model.use_remove_padding=True \
     +actor_rollout_ref.model.trust_remote_code=True \
@@ -129,7 +130,7 @@ PYTHONUNBUFFERED=1 python3 -m verl_tool.trainer.main_ppo \
     critic.ppo_micro_batch_size_per_gpu=$ppo_micro_batch_size_per_gpu \
     critic.ulysses_sequence_parallel_size=$ulysses_sequence_parallel_size \
     algorithm.kl_ctrl.kl_coef=$kl_coef \
-    trainer.logger=['console','wandb'] \
+    trainer.logger=['console','tensorboard'] \
     trainer.project_name=$reward_manager \
     trainer.experiment_name=$run_name \
     trainer.val_before_train=False \
@@ -139,7 +140,8 @@ PYTHONUNBUFFERED=1 python3 -m verl_tool.trainer.main_ppo \
     +trainer.remove_previous_ckpt_in_save=True \
     trainer.save_freq=10 \
     trainer.test_freq=10 \
-    trainer.total_epochs=1 
+    trainer.total_epochs=1 \
+    +actor_rollout_ref.agent.only_keep_last_llm_response=True \
 
 
 pkill -P -9 $server_pid
