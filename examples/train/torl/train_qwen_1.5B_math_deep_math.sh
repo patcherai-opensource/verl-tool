@@ -1,6 +1,7 @@
 set -x
 dataset_name=deep_math_tool_v9 # or math_torl_offical to use torl training data
-train_data=/home/ma-user/work/haozhe/muze/sa1brl.parquet
+# train_data=/home/ma-user/work/haozhe/muze/sa1brl.parquet
+train_data=[$(pwd)/data/${dataset_name}/train.parquet]
 val_data=[$(pwd)/data/${dataset_name}/test.parquet,\
 $(pwd)/data/${dataset_name}/math500_test.parquet,\
 $(pwd)/data/${dataset_name}/aime24_test.parquet,\
@@ -11,6 +12,8 @@ n_gpus_per_node=8
 n_nodes=1
 n=16
 batch_size=16
+
+
 ppo_mini_batch_size=$batch_size
 max_prompt_length=6000
 max_response_length=8000
@@ -18,7 +21,8 @@ max_obs_length=6000
 temperature=1.0
 top_p=1.0
 strategy="fsdp_agent" # remove _agent for normal verl behavior
-action_stop_tokens='</tool_call>'
+# action_stop_tokens='</tool_call>'
+action_stop_tokens='```output'
 max_turns=1
 kl_loss_coef=0.0
 kl_coef=0
@@ -54,7 +58,7 @@ echo "action_stop_tokens_file=$action_stop_tokens_file"
 host=127.0.0.1
 port=$(shuf -i 30000-31000 -n 1)
 tool_server_url=http://$host:$port/get_observation
-python -m verl_tool.servers.serve --host $host --port $port --tool_type "crop_image" --workers_per_tool 8 &
+python -m verl_tool.servers.serve --host $host --port $port --tool_type "python_code" --workers_per_tool 8 &
 server_pid=$!
 
 echo "Server (pid=$server_pid) started at $tool_server_url"
@@ -109,7 +113,6 @@ PYTHONUNBUFFERED=1 python3 -m verl_tool.trainer.main_ppo \
     actor_rollout_ref.rollout.temperature=$temperature \
     actor_rollout_ref.rollout.top_p=$top_p \
     actor_rollout_ref.rollout.max_num_batched_tokens=$max_num_batched_tokens \
-    +actor_rollout_ref.rollout.limit_images=4 \
     actor_rollout_ref.rollout.top_k=-1 \
     actor_rollout_ref.rollout.n=$n \
     actor_rollout_ref.rollout.log_prob_use_dynamic_bsz=$use_dynamic_bsz \

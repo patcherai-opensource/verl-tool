@@ -22,6 +22,7 @@ from .config import AgentActorConfig
 from transformers import  Qwen2_5_VLProcessor
 from .tensor_helper import TensorHelper, TensorConfig
 import debugpy
+from tensordict import TensorDict
 from PIL import Image
 
 # 1) A sanitizer that strips all embedded NULs (and, optionally, any
@@ -30,7 +31,48 @@ CONTROL_CHAR_RE = re.compile(
     # this matches U+0000 through U+001F, excluding tab(09), LF(0A), CR(0D)
     r'[\x00-\x08\x0B\x0C\x0E-\x1F]'
 )
+#use deepcopy to repeat batch to prevent reference bug
+def repeat_batch(data_batch,num_samples):
+    repeat_times = num_samples
+    if data_batch.batch is not None:
 
+            # Interleave the data
+        repeated_tensors = {
+            key: tensor.repeat_interleave(repeat_times, dim=0) for key, tensor in data_batch.batch.items()
+        }
+
+
+        repeated_batch = TensorDict(
+            source=repeated_tensors,
+            batch_size=(data_batch.batch.batch_size[0] * repeat_times,),
+        )
+    else:
+        repeated_batch = None
+
+    repeated_non_tensor_batch = {}
+    for key, val in data_batch.non_tensor_batch.items():
+        import numpy as np
+        import copy
+
+        def expand_np(a, num):
+            def expand(obj, num_samples):
+                return [copy.deepcopy(obj) for _ in range(num_samples)]
+
+            output = []
+            for item in a:
+                output.extend(expand(item, num))  # 用 extend 而不是 append
+
+            return np.array(output,dtype=object)
+
+        repeated_non_tensor_batch[key] = expand_np(val, repeat_times)
+
+
+    return DataProto(
+        batch=repeated_batch,
+        non_tensor_batch=repeated_non_tensor_batch,
+        meta_info=data_batch.meta_info,
+    )
+#use deepcopy to repeat batch to prevent reference bug
 def sanitize_request(obj: Any) -> Any:
     """
     Recursively walk through obj and:
@@ -135,6 +177,7 @@ class AgentActorManager:
         """
         this version verl do not repeat the input by n times, so we manually repeat the input by n times
         """
+        
         # we manually repeat the input by n times if needed since every trajectory is independent
         do_sample = inputs.meta_info.get("do_sample", True)
         assert 'traj_ids' in inputs.non_tensor_batch, "traj_ids should be claimed univerally in the ray trainer"
@@ -143,7 +186,10 @@ class AgentActorManager:
             n = 1
         else:
             n = self.config.n
-            inputs = inputs.repeat(n, interleave=True)
+            # breakpoint()
+            # inputs = inputs.repeat(n, interleave=True)
+            #use deepcopy to repeat batch to prevent reference bug
+            inputs = repeat_batch(inputs,n)
         # add "_{i}" for each trajectory to the traj_ids
         for i in range(ori_len):
             for j in range(n):
@@ -410,7 +456,7 @@ class AgentActorManager:
             )
         new_rollings.non_tensor_batch = rollings.non_tensor_batch.copy()
         #add obs image to multimodal data
-        breakpoint()
+        # breakpoint()
         if "multi_modal_data" in new_rollings.non_tensor_batch:
             for next_ob,mm in zip(next_obs,new_rollings.non_tensor_batch['multi_modal_data']):
                 if isinstance(next_ob,dict) and 'image' in next_ob:
@@ -617,6 +663,7 @@ class AgentActorManager:
             if "multi_modal_data" in rollings_active.non_tensor_batch:
                 rollings_active.non_tensor_batch['extra_info'] = rollings_active.non_tensor_batch['multi_modal_data']
             # added by muze: add multimodal data to extra_field
+          
 
 
             if step == self.config.max_turns and self.config.force_finish_for_last_turn:
@@ -647,7 +694,7 @@ class AgentActorManager:
                 extra_fields=rollings_active.non_tensor_batch.get('extra_info', None),
                 is_last_step=(step == self.config.max_turns)
             )
-
+            print("interact with tool server")
             # # for debug
             # with open(f"temp-{step}.json", 'w') as f:
             #     json.dump([{
@@ -667,6 +714,7 @@ class AgentActorManager:
             valid_action_stats += torch.tensor(valid_action, dtype=torch.int)
 
             next_obs_ids = self._process_next_obs(next_obs, dones, valid_action, finishs) # [active_size, obs_length]
+            print("process next obs")
 
             obs_idx = 0
             for i, active in enumerate(active_mask):
@@ -687,17 +735,21 @@ class AgentActorManager:
                 next_obs_ids,
                 next_obs
             )
+            print("updata rolling state")
             original_right_side, overlong_dones = self._update_right_side(
                 original_right_side,
                 responses_ids,
                 next_obs_ids
             )
+            print("update right side")
             agent_sampling_params['max_tokens'] = available_context_budget
             # print("Before overlong dones:", active_mask.sum().item())
             active_mask = active_mask * (~overlong_dones.to(active_mask.dtype).to(active_mask.device))
             # print("After overlong dones:", active_mask.sum().item())
             active_num_list.append(active_mask.sum().item())
+            print("finished step")
             breakpoint()
+            # breakpoint()
 
         non_tensors = {
             'traj_ids': traj_ids.tolist(),
@@ -707,7 +759,7 @@ class AgentActorManager:
             'action_lengths': turns_stats_extra["action_lengths"],
             'obs_lengths': turns_stats_extra["obs_lengths"],
         }
-        breakpoint()
+
 
         print("ACTIVE_TRAJ_NUM:", active_num_list)
 

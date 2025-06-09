@@ -7,7 +7,7 @@ $(pwd)/data/${dataset_name}/aime24_test.parquet,\
 $(pwd)/data/${dataset_name}/aime25_test.parquet]
 model_name=/home/ma-user/work/haozhe/muze/models/Qwen2.5-VL-3B-Instruct
 rl_alg=grpo # gae(ppo) or grpo, if grpo, then better set n>1 otherwise the group norm can not be effective
-n_gpus_per_node=8
+n_gpus_per_node=2
 n_nodes=1
 n=16
 batch_size=16
