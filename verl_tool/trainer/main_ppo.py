@@ -19,6 +19,8 @@ from verl_tool.trainer.ppo.ray_trainer import AgentRayPPOTrainer as RayPPOTraine
 import os
 import ray
 import hydra
+import debugpy
+
 
 
 def get_custom_reward_fn(config):
@@ -51,6 +53,13 @@ def get_custom_reward_fn(config):
 
 @hydra.main(config_path='config', config_name='ppo_trainer', version_base=None)
 def main(config):
+    # Initialize debugpy for debugging (controlled by environment variable)
+
+    # debugpy.listen(("localhost", 5680))
+    # print(f"Waiting for debugger to attach on port 5680")
+    # debugpy.wait_for_client()
+    # print("Debugger attached!")
+    
     # TODO(linjunrong.ocss884): this ENV is left for resolving SGLang conflict with ray devices
     # isolation, will solve in the future
     os.environ["ENSURE_CUDA_VISIBLE_DEVICES"] = os.environ.get('CUDA_VISIBLE_DEVICES', '')
@@ -72,6 +81,14 @@ def main(config):
 class TaskRunner:
 
     def run(self, config):
+        # Initialize debugpy for debugging in the trainer worker process
+        import debugpy
+
+        # debugpy.listen(("localhost", 5690))  # Use a different port for the worker
+        # print(f"Trainer worker: Waiting for debugger to attach on port 5690")
+        # debugpy.wait_for_client()
+        # print("Trainer worker: Debugger attached!")
+        
         from verl.utils.fs import copy_to_local
         # print initial config
         from pprint import pprint

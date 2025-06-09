@@ -13,12 +13,16 @@ from typing import List, Dict, Any, Tuple
 from dataclasses import dataclass
 from verl import DataProto
 from verl.utils.tracking import Tracking
-from verl.utils import hf_tokenizer
+from verl.utils import hf_tokenizer, hf_processor
+from qwen_vl_utils import process_vision_info, fetch_image
 from verl.utils.model import get_generation_config
 from tqdm import tqdm
 from typing import List, Union
 from .config import AgentActorConfig
+from transformers import  Qwen2_5_VLProcessor
 from .tensor_helper import TensorHelper, TensorConfig
+import debugpy
+from PIL import Image
 
 # 1) A sanitizer that strips all embedded NULs (and, optionally, any
 #    other C0 control characters except common whitespace).
@@ -44,8 +48,34 @@ def sanitize_request(obj: Any) -> Any:
     elif isinstance(obj, str):
         # strip NUL (\x00) and other C0 control chars
         return CONTROL_CHAR_RE.sub('', obj)
+    elif isinstance(obj,Image.Image ):
+        import base64
+        import io
+     
+
+        def encode_image(img):
+            buffered = io.BytesIO()
+            img.save(buffered, format="JPEG")
+            img_str = base64.b64encode(buffered.getvalue()).decode()
+            return img_str
+
+        # Create JSON with the encoded image
+        def decode_image(img_str):
+            img_data = base64.b64decode(img_str)
+            img = Image.open(io.BytesIO(img_data))
+            return img
+        return encode_image(obj)
+
     else:
         return obj
+import base64
+import io
+from PIL import Image
+# Create JSON with the encoded image
+def decode_image(img_str):
+    img_data = base64.b64decode(img_str)
+    img = Image.open(io.BytesIO(img_data))
+    return img
 
 class AgentActorManager:
     def __init__(
@@ -57,6 +87,7 @@ class AgentActorManager:
     ):
         self.model_path = model_path
         self.tokenizer = hf_tokenizer(self.model_path)
+        self.processor = hf_processor(self.model_path)
         self.generation_config = get_generation_config(self.model_path)
         self.actor_rollout_wg = actor_rollout_wg
         self.config = config
@@ -226,31 +257,73 @@ class AgentActorManager:
     def _process_next_obs(self, next_obs: List[str], dones: List[bool], valid_action: List[bool], finishs: List[bool]) -> torch.Tensor:
         """Process next observations from environment."""
         mtrl_sep = self.config.mtrl_sep
+        # breakpoint()
+
         next_obs = [obs if not done else "" for obs, done in zip(next_obs, dones)]
-        if self.config.truncate_obs_side == 'left':
-            next_obs_ids = self.tokenizer(
-                next_obs,
-                padding='longest',
-                return_tensors='pt',
-                add_special_tokens=False,  # Prevents adding special tokens
-                padding_side='left',
-            )['input_ids'].to(torch.int64)
-            if next_obs_ids.shape[1] > self.config.max_obs_length:
-                print(f"[WARNING] OBSERVATION TOO LONG, CONSIDER CHANGING YOUR CONFIG, {next_obs_ids.shape[1]} & {self.config.max_obs_length}")
-                next_obs_ids = next_obs_ids[:, -self.config.max_obs_length:]
-        elif self.config.truncate_obs_side == 'right':
-            next_obs_ids = self.tokenizer(
-                next_obs,
-                padding='longest',
-                return_tensors='pt',
-                add_special_tokens=False,  # Prevents adding special tokens
-                padding_side='right',
-            )['input_ids'].to(torch.int64)
-            if next_obs_ids.shape[1] > self.config.max_obs_length:
-                print(f"[WARNING] OBSERVATION TOO LONG, CONSIDER CHANGING YOUR CONFIG, {next_obs_ids.shape[1]} & {self.config.max_obs_length}")
-                next_obs_ids = next_obs_ids[:, :self.config.max_obs_length]
+        for i in range(len(next_obs)):
+            if isinstance(next_obs[i],str):
+                text = next_obs[i]
+                next_obs[i] = {'text':text}
+
+        if isinstance (next_obs[0], str ):
+            #next obs is pure text
+            if self.config.truncate_obs_side == 'left':
+                next_obs_ids = self.tokenizer(
+                    next_obs,
+                    padding='longest',
+                    return_tensors='pt',
+                    add_special_tokens=False,  # Prevents adding special tokens
+                    padding_side='left',
+                )['input_ids'].to(torch.int64)
+                if next_obs_ids.shape[1] > self.config.max_obs_length:
+                    print(f"[WARNING] OBSERVATION TOO LONG, CONSIDER CHANGING YOUR CONFIG, {next_obs_ids.shape[1]} & {self.config.max_obs_length}")
+                    next_obs_ids = next_obs_ids[:, -self.config.max_obs_length:]
+            elif self.config.truncate_obs_side == 'right':
+                next_obs_ids = self.tokenizer(
+                    next_obs,
+                    padding='longest',
+                    return_tensors='pt',
+                    add_special_tokens=False,  # Prevents adding special tokens
+                    padding_side='right',
+                )['input_ids'].to(torch.int64)
+                if next_obs_ids.shape[1] > self.config.max_obs_length:
+                    print(f"[WARNING] OBSERVATION TOO LONG, CONSIDER CHANGING YOUR CONFIG, {next_obs_ids.shape[1]} & {self.config.max_obs_length}")
+                    next_obs_ids = next_obs_ids[:, :self.config.max_obs_length]
+            else:
+                raise ValueError(f"Invalid truncate_obs_side: {self.config.truncate_obs_side}")
         else:
-            raise ValueError(f"Invalid truncate_obs_side: {self.config.truncate_obs_side}")
+
+            #next obs has multimodal data
+            next_text = [obs['text'] for obs in next_obs]
+            next_images_info = [fetch_image({'image':decode_image(obs['image'])}) for obs in next_obs if 'image' in obs and isinstance(obs,dict)]
+            if self.config.truncate_obs_side == 'left':
+                next_obs_ids = self.processor(
+                    text = next_text,
+                    padding='longest',
+                    images=next_images_info,
+                    return_tensors='pt',
+                    add_special_tokens=False,  # Prevents adding special tokens
+                    padding_side='left',
+                )['input_ids'].to(torch.int64)
+                if next_obs_ids.shape[1] > self.config.max_obs_length:
+                    print(f"[WARNING] OBSERVATION TOO LONG, CONSIDER CHANGING YOUR CONFIG, {next_obs_ids.shape[1]} & {self.config.max_obs_length}")
+                    next_obs_ids = next_obs_ids[:, -self.config.max_obs_length:]
+            elif self.config.truncate_obs_side == 'right':
+                next_obs_ids = self.processor(
+                    text = next_text,
+                    padding='longest',
+                    images=next_images_info,
+                    return_tensors='pt',
+                    add_special_tokens=False,  # Prevents adding special tokens
+                    padding_side='right',
+                )['input_ids'].to(torch.int64)
+                if next_obs_ids.shape[1] > self.config.max_obs_length:
+                    print(f"[WARNING] OBSERVATION TOO LONG, CONSIDER CHANGING YOUR CONFIG, {next_obs_ids.shape[1]} & {self.config.max_obs_length}")
+                    next_obs_ids = next_obs_ids[:, :self.config.max_obs_length]
+            else:
+                raise ValueError(f"Invalid truncate_obs_side: {self.config.truncate_obs_side}")
+
+
         if self.config.enable_mtrl:
             next_obs = self.tokenizer.batch_decode(
                 next_obs_ids,
@@ -277,7 +350,7 @@ class AgentActorManager:
         return next_obs_ids
 
     def _update_rolling_state(self, left_side, rollings, cur_responses: torch.Tensor,
-                              next_obs_ids: torch.Tensor) -> Dict:
+                              next_obs_ids: torch.Tensor,next_obs) -> Dict:
         """Update rolling state with new responses and observations."""
 
         # Concatenate and handle padding
@@ -287,7 +360,7 @@ class AgentActorManager:
             next_obs_ids
         ])
 
-        # Create attention mask and position ids
+     # Create attention mask and position ids
         new_attention_mask = self.tensor_fn.create_attention_mask(new_input_ids)
         new_position_ids = self.tensor_fn.create_position_ids(new_attention_mask)
 
@@ -336,6 +409,13 @@ class AgentActorManager:
                 }
             )
         new_rollings.non_tensor_batch = rollings.non_tensor_batch.copy()
+        #add obs image to multimodal data
+        breakpoint()
+        if "multi_modal_data" in new_rollings.non_tensor_batch:
+            for next_ob,mm in zip(next_obs,new_rollings.non_tensor_batch['multi_modal_data']):
+                if isinstance(next_ob,dict) and 'image' in next_ob:
+                    mm['image'].append(decode_image(next_ob['image']))
+
         new_rollings.meta_info.update(rollings.meta_info)
         
         # update raw_prompt_ids, required for vllm inference
@@ -532,11 +612,18 @@ class AgentActorManager:
                 {k: v[active_mask] for k, v in rollings.non_tensor_batch.items()},
                 meta_info=ori_meta_info
             )
+
+            # added by muze: add multimodal data to extra_field
+            if "multi_modal_data" in rollings_active.non_tensor_batch:
+                rollings_active.non_tensor_batch['extra_info'] = rollings_active.non_tensor_batch['multi_modal_data']
+            # added by muze: add multimodal data to extra_field
+
+
             if step == self.config.max_turns and self.config.force_finish_for_last_turn:
                 # remove the action stop tokens in the last turn to force a finish
                 agent_sampling_params.pop('stop')
             with self.actor_rollout_wg.rollout.update_sampling_params(**agent_sampling_params):
-                gen_output = self.actor_rollout_wg.rollout.generate_sequences(rollings_active) # [active_size, response_length]
+                gen_output = self.actor_rollout_wg.rollout.generate_sequences(rollings_active) # [active_size, response_length] 
 
             responses_ids, responses_str, do_actions = self._postprocess_responses(gen_output.batch['responses'], step) # [active_size, ...]
             responses_ids, _ = self.tensor_fn._example_level_pad(responses_ids, responses_str, active_mask) # [bs*n, response_length]
@@ -597,7 +684,8 @@ class AgentActorManager:
                 original_left_side,
                 rollings,
                 responses_ids,
-                next_obs_ids
+                next_obs_ids,
+                next_obs
             )
             original_right_side, overlong_dones = self._update_right_side(
                 original_right_side,
@@ -609,6 +697,7 @@ class AgentActorManager:
             active_mask = active_mask * (~overlong_dones.to(active_mask.dtype).to(active_mask.device))
             # print("After overlong dones:", active_mask.sum().item())
             active_num_list.append(active_mask.sum().item())
+            breakpoint()
 
         non_tensors = {
             'traj_ids': traj_ids.tolist(),
@@ -618,6 +707,7 @@ class AgentActorManager:
             'action_lengths': turns_stats_extra["action_lengths"],
             'obs_lengths': turns_stats_extra["obs_lengths"],
         }
+        breakpoint()
 
         print("ACTIVE_TRAJ_NUM:", active_num_list)
 
