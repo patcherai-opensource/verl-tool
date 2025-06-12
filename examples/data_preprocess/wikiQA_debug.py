@@ -53,12 +53,12 @@ TEMPLATES = {
         "   <think>This button looks relevant to my goal. Clicking it should take me to the next step.</think>\n"
         "   ```click [1234]```\n"
         "6. Issue the stop action when you think you have achieved the objective. Don’t generate anything after stop.\n"
-        "<|im_end|>\n"
         """7. Always format actions correctly: 
 ```command [parameters]```
 For example, if searching for "death row inmates in the US" in a search field with ID `21`, correctly format it as:
 ```type [21] [death row inmates in the US] [1]```
 Avoid incorrect formats that omit brackets around parameters or numeric values.\n\n"""
+        "<|im_end|>\n"
         ),
         # ---- user message ----
         "user":("<|im_start|>user\n"
@@ -148,6 +148,11 @@ def main():
                 "   <think>This button looks relevant to my goal. Clicking it should take me to the next step.</think>\n"
                 "   ```click [1234]```\n"
                 "6. Issue the stop action when you think you have achieved the objective. Don’t generate anything after stop.\n"
+                """7. Always format actions correctly: 
+```command [parameters]```
+For example, if searching for "death row inmates in the US" in a search field with ID `21`, correctly format it as:
+```type [21] [death row inmates in the US] [1]```
+Avoid incorrect formats that omit brackets around parameters or numeric values.\n\n"""
             )
 
             # user_prompt = (
@@ -262,7 +267,7 @@ def main():
     print(dataset["train"])
     train_data = dataset["train"]
     # Select first 160 samples for debugging
-    train_data = train_data.select(range(3200))
+    train_data = train_data.select(range(25600))
     print(train_data)
 
     dev_data = dataset["dev"]

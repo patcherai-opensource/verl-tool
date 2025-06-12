@@ -113,6 +113,18 @@ class AgentActorManager:
         else:
             n = self.config.n
             inputs = inputs.repeat(n, interleave=True)
+        # 新增：extra_info 也重复 n 倍
+        if 'extra_info' in inputs.non_tensor_batch and inputs.non_tensor_batch['extra_info'] is not None:
+            ori_extra = inputs.non_tensor_batch['extra_info']
+            new_extra = []
+            for i in range(ori_len):
+                for j in range(n):
+                    new_extra.append(ori_extra[i])
+            # 保持类型一致
+            if isinstance(ori_extra, np.ndarray):
+                inputs.non_tensor_batch['extra_info'] = np.array(new_extra, dtype=object)
+            else:
+                inputs.non_tensor_batch['extra_info'] = new_extra
         # add "_{i}" for each trajectory to the traj_ids
         for i in range(ori_len):
             for j in range(n):
@@ -788,8 +800,13 @@ class AgentActorManager:
             "is_last_step": [is_last_step] * len(finishs)
         }
         if extra_fields is not None:
-            active_extra_fields = [extra_fields[i] for i in range(len(extra_fields)) if active_mask[i]]
-            batch_data['extra_fields'] = active_extra_fields.tolist() if isinstance(active_extra_fields, np.ndarray) else active_extra_fields
+            # active_extra_fields = [extra_fields[i] for i in range(len(extra_fields)) if active_mask[i]]
+            # batch_data['extra_fields'] = active_extra_fields.tolist() if isinstance(active_extra_fields, np.ndarray) else active_extra_fields
+            ef = list(extra_fields)
+            if len(ef) != len(active_mask):
+                ef = ef + [{}] * (len(active_mask) - len(ef))
+            active_extra_fields = [ef[i] for i in range(len(ef)) if active_mask[i]]
+            batch_data['extra_fields'] = active_extra_fields
         print(f" - Number of finished responses: {len([x for x in do_actions if not x])} / {len(do_actions)}")
         response = self.send_batch_requests(batch_data)
         active_observations = response['observations']

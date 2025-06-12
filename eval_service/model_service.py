@@ -155,7 +155,7 @@ class ModelService:
         for i in range(num_models):
             cmd = [
                 "vllm", "serve", self.model_config.model, "--api-key", "token-abc123",
-                "--host", host, "--port", str(ports[i]), "--disable-uvicorn-access-log", "--disable-log-stats", "--disable-log-requests"
+                "--host", host, "--port", str(ports[i]), "--disable-log-stats", "--disable-log-requests"
             ] + vllm_args
             env = os.environ.copy()
             env["VLLM_LOGGING_LEVEL"] = "ERROR"
@@ -207,6 +207,30 @@ class ModelService:
             stream=False,
             **sampling_params
         )
+        # 保存prompt和response到./model_cache.jsonl
+        cache_path = './model_cache.jsonl'
+        try:
+            # 只保存可序列化的内容
+            cache_data = {
+                'prompts': prompts,
+                'model': model,
+                'sampling_params': sampling_params,
+                'response': {
+                    'model': getattr(response, 'model', None),
+                    'choices': [
+                        {
+                            'text': getattr(choice, 'text', None),
+                            'finish_reason': getattr(choice, 'finish_reason', None),
+                            'stop_reason': getattr(choice, 'stop_reason', None) if hasattr(choice, 'stop_reason') else None
+                        } for choice in getattr(response, 'choices', [])
+                    ]
+                }
+            }
+            with open(cache_path, 'a') as f:
+                import json
+                f.write(json.dumps(cache_data, ensure_ascii=False) + '\n')
+        except Exception as e:
+            print(f"[WARNING] Failed to cache prompt/response: {e}")
         return response
     
     def generate_with_tools(self, messages_list: List[List[Dict[str, str]]], sampling_params: dict, extra_fields=None) -> Tuple[List[str], List[str]]:

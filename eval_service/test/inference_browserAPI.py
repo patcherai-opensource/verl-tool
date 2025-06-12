@@ -68,12 +68,12 @@ def infer_one(row, client, model_name):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--data_path', type=str, default="/minimax-dialogue/ruobai/cogito/verl-tool/data/wikiQA_debug/test.parquet")
-    parser.add_argument('--result_dir', type=str, default="/minimax-dialogue/ruobai/cogito/verl-tool/eval_service/result")
-    parser.add_argument('--model_name', type=str, default="/home/zhiheng/cogito/base_models/qwen2.5-3b-baseline-step10")
-    parser.add_argument('--api_port', type=int, default=5000)
+    parser.add_argument('--data_path', type=str, default="/data/minimax-dialogue/ruobai/cogito/verl-tool/data/wikiQA_debug/dev.parquet")
+    parser.add_argument('--result_dir', type=str, default="/data/minimax-dialogue/ruobai/cogito/verl-tool/eval_service/result_new")
+    parser.add_argument('--model_name', type=str, default="Qwen/Qwen3-4B")
+    parser.add_argument('--api_port', type=int, default=5004)
     parser.add_argument('--api_key', type=str, default="sk-proj-1234567890")
-    parser.add_argument('--max_workers', type=int, default=64)
+    parser.add_argument('--max_workers', type=int, default=128)
     args = parser.parse_args()
 
     os.makedirs(args.result_dir, exist_ok=True)
