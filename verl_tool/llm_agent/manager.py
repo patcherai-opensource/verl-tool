@@ -31,7 +31,7 @@ CONTROL_CHAR_RE = re.compile(
     # this matches U+0000 through U+001F, excluding tab(09), LF(0A), CR(0D)
     r'[\x00-\x08\x0B\x0C\x0E-\x1F]'
 )
-#use deepcopy to repeat batch to prevent reference bug
+#added muze: use deepcopy to repeat batch to prevent reference bug
 def repeat_batch(data_batch,num_samples):
     repeat_times = num_samples
     if data_batch.batch is not None:
@@ -72,7 +72,7 @@ def repeat_batch(data_batch,num_samples):
         non_tensor_batch=repeated_non_tensor_batch,
         meta_info=data_batch.meta_info,
     )
-#use deepcopy to repeat batch to prevent reference bug
+#added muze: use deepcopy to repeat batch to prevent reference bug
 def sanitize_request(obj: Any) -> Any:
     """
     Recursively walk through obj and:
@@ -90,6 +90,7 @@ def sanitize_request(obj: Any) -> Any:
     elif isinstance(obj, str):
         # strip NUL (\x00) and other C0 control chars
         return CONTROL_CHAR_RE.sub('', obj)
+    #added muze: encode multimodal data
     elif isinstance(obj,Image.Image ):
         import base64
         import io
@@ -101,12 +102,9 @@ def sanitize_request(obj: Any) -> Any:
             img_str = base64.b64encode(buffered.getvalue()).decode()
             return img_str
 
-        # Create JSON with the encoded image
-        def decode_image(img_str):
-            img_data = base64.b64decode(img_str)
-            img = Image.open(io.BytesIO(img_data))
-            return img
+
         return encode_image(obj)
+    #added muze: encode multimodal data
 
     else:
         return obj
@@ -186,7 +184,7 @@ class AgentActorManager:
             n = 1
         else:
             n = self.config.n
-            # breakpoint()
+
             # inputs = inputs.repeat(n, interleave=True)
             #use deepcopy to repeat batch to prevent reference bug
             inputs = repeat_batch(inputs,n)
@@ -303,7 +301,7 @@ class AgentActorManager:
     def _process_next_obs(self, next_obs: List[str], dones: List[bool], valid_action: List[bool], finishs: List[bool]) -> torch.Tensor:
         """Process next observations from environment."""
         mtrl_sep = self.config.mtrl_sep
-        # breakpoint()
+
 
         next_obs = [obs if not done else "" for obs, done in zip(next_obs, dones)]
         for i in range(len(next_obs)):
@@ -339,7 +337,7 @@ class AgentActorManager:
                 raise ValueError(f"Invalid truncate_obs_side: {self.config.truncate_obs_side}")
         else:
 
-            #next obs has multimodal data
+            #added muze: next obs has multimodal data
             next_text = [obs['text'] for obs in next_obs]
             next_images_info = [fetch_image({'image':decode_image(obs['image'])}) for obs in next_obs if 'image' in obs and isinstance(obs,dict)]
             if self.config.truncate_obs_side == 'left':
@@ -455,21 +453,60 @@ class AgentActorManager:
                 }
             )
         new_rollings.non_tensor_batch = rollings.non_tensor_batch.copy()
-        #add obs image to multimodal data
-        # breakpoint()
+
+        # added muze: add obs image to multimodal data
         if "multi_modal_data" in new_rollings.non_tensor_batch:
             for next_ob,mm in zip(next_obs,new_rollings.non_tensor_batch['multi_modal_data']):
                 if isinstance(next_ob,dict) and 'image' in next_ob:
                     mm['image'].append(decode_image(next_ob['image']))
+        # added muze: add obs image to multimodal data
 
         new_rollings.meta_info.update(rollings.meta_info)
-        
+        def process_raw_prompt_image_pad(raw_prompt_ids,image_start = '<|vision_start|>',image_pad = '<|image_pad|>',image_end = '<|vision_end|>'):
+            start_id = self.tokenizer.encode(image_start,add_special_tokens=False)[0]
+            end_id = self.tokenizer.encode(image_end,add_special_tokens=False)[0]
+            pad_id = self.tokenizer.encode(image_pad,add_special_tokens=False)[0]
+            if isinstance(raw_prompt_ids, (list, tuple)):
+                sequences = [raw_prompt_ids]
+            else:
+                sequences = raw_prompt_ids
+                
+            processed_sequences = []
+            for sequence in sequences:
+                processed_sequence = []
+                i = 0
+                while i < len(sequence):
+                    if sequence[i] == start_id:
+                        # 找到下一个 end_id
+                        next_end = i + 1
+                        while next_end < len(sequence) and sequence[next_end] != end_id:
+                            next_end += 1
+                            
+                        # 只保留一对 start_id 和 end_id
+                        processed_sequence.append(start_id)
+                        processed_sequence.append(pad_id)
+                        processed_sequence.append(end_id)
+                        
+                        # 跳过所有中间的 tokens
+                        i = next_end + 1
+                    else:
+                        processed_sequence.append(sequence[i])
+                        i += 1
+                        
+                processed_sequences.append(processed_sequence)
+            
+            # 如果输入是单个序列，返回单个结果
+            if len(processed_sequences) == 1:
+                return processed_sequences[0]
+            return processed_sequences
         # update raw_prompt_ids, required for vllm inference
         ray_prompt_ids = []
         for i in range(new_rollings.batch['input_ids'].size(0)):
             non_pad_index = torch.nonzero(new_rollings.batch['input_ids'][i] != self.tokenizer.pad_token_id, as_tuple=False)[0][0]
             ray_prompt_ids.append(new_rollings.batch['input_ids'][i][non_pad_index:].tolist())
-        new_rollings.non_tensor_batch['raw_prompt_ids'] = np.array(ray_prompt_ids, dtype=object)
+        # added muze: raw_prompt_ids have one image_pad per image
+        new_rollings.non_tensor_batch['raw_prompt_ids'] = np.array(process_raw_prompt_image_pad(np.array(ray_prompt_ids, dtype=object)),dtype=object)
+        # added muze: raw_prompt_ids have one image_pad per image
 
         return new_rollings, available_context_budget
 
@@ -578,6 +615,10 @@ class AgentActorManager:
         active_num_list = [active_mask.sum().item()]
         rollings = gen_batch
         traj_ids = gen_batch.non_tensor_batch['traj_ids']
+        # added by muze: add multimodal data to extra_field
+        if "multi_modal_data" in rollings.non_tensor_batch:
+            rollings.non_tensor_batch['extra_info'] = rollings.non_tensor_batch['multi_modal_data']
+        # added by muze: add multimodal data to extra_field
 
         turns_stats_extra = {
             "action_lengths": [[] for _ in range(gen_batch.batch['input_ids'].shape[0])],
@@ -627,7 +668,8 @@ class AgentActorManager:
                 original_left_side,
                 rollings,
                 responses_ids,
-                next_obs_ids
+                next_obs_ids,
+                next_obs
             )
             original_right_side, overlong_dones = self._update_right_side(
                 original_right_side,
@@ -658,7 +700,7 @@ class AgentActorManager:
                 {k: v[active_mask] for k, v in rollings.non_tensor_batch.items()},
                 meta_info=ori_meta_info
             )
-
+           
             # added by muze: add multimodal data to extra_field
             if "multi_modal_data" in rollings_active.non_tensor_batch:
                 rollings_active.non_tensor_batch['extra_info'] = rollings_active.non_tensor_batch['multi_modal_data']
@@ -748,8 +790,23 @@ class AgentActorManager:
             # print("After overlong dones:", active_mask.sum().item())
             active_num_list.append(active_mask.sum().item())
             print("finished step")
-            breakpoint()
-            # breakpoint()
+           
+        # added muze: get final multimodal inputs
+        def get_final_mm_inputs(rollings: DataProto):
+            mm_inputs = []
+            texts =  self.tokenizer.batch_decode(rollings.non_tensor_batch['raw_prompt_ids'])
+            for i in range(rollings.batch['input_ids'].shape[0]):
+                text = texts[i]
+                images = rollings.non_tensor_batch['multi_modal_data'][i]['image']
+                input = self.processor(text=[text], images=images, videos=None, return_tensors="pt")
+                input.pop('input_ids')
+                input.pop('attention_mask')
+                # input.pop('second_per_grid_ts')
+                mm_inputs.append(dict(input))
+            return mm_inputs
+
+        mm_inputs = np.array(get_final_mm_inputs(rollings), dtype=object)
+        # added muze: get final multimodal inputs
 
         non_tensors = {
             'traj_ids': traj_ids.tolist(),
@@ -763,7 +820,8 @@ class AgentActorManager:
 
         print("ACTIVE_TRAJ_NUM:", active_num_list)
 
-        results = self._compose_final_output(original_left_side, original_right_side, non_tensors, ori_meta_info)
+        results = self._compose_final_output(original_left_side, original_right_side, non_tensors, ori_meta_info, mm_inputs)
+        
         return results
 
     def _compose_final_output(
@@ -771,7 +829,8 @@ class AgentActorManager:
         left_side: Dict,
         right_side: Dict,
         non_tensors: Dict,
-        meta_info: Dict
+        meta_info: Dict,
+        mm_inputs: List[Dict]
     ) -> Tuple[Dict, Dict]:
         """
         Compose the final output of the rollout by merging prompt and response
@@ -850,6 +909,7 @@ class AgentActorManager:
         # ---------- 3. Create and return DataProto ----------
         final_output = DataProto.from_dict(final_output, non_tensors=non_tensors)
         final_output.meta_info.update(meta_info)
+        final_output.non_tensor_batch['multi_modal_inputs'] = mm_inputs
 
         return final_output
 

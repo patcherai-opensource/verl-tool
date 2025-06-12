@@ -54,7 +54,18 @@ def get_custom_reward_fn(config):
 @hydra.main(config_path='config', config_name='ppo_trainer', version_base=None)
 def main(config):
     # Initialize debugpy for debugging (controlled by environment variable)
+    # Set random seeds for reproducibility
+    import random
+    import numpy as np
+    import torch
 
+    seed = 42  # You can change this seed value as needed
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
     # debugpy.listen(("localhost", 5680))
     # print(f"Waiting for debugger to attach on port 5680")
     # debugpy.wait_for_client()
