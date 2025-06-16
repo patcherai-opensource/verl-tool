@@ -56,13 +56,7 @@ def main(config):
     os.environ["ENSURE_CUDA_VISIBLE_DEVICES"] = os.environ.get('CUDA_VISIBLE_DEVICES', '')
     if not ray.is_initialized():
         # this is for local ray cluster
-        ray.init(runtime_env={
-            'env_vars': {
-                'TOKENIZERS_PARALLELISM': 'true',
-                'NCCL_DEBUG': 'WARN',
-                'VLLM_LOGGING_LEVEL': 'WARN',
-            }
-        }, num_cpus=32)
+        ray.init()
 
     runner = TaskRunner.remote()
     ray.get(runner.run.remote(config))

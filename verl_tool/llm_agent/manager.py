@@ -800,12 +800,12 @@ class AgentActorManager:
             "is_last_step": [is_last_step] * len(finishs)
         }
         if extra_fields is not None:
-            ef = list(extra_fields)
+            # ef = list(extra_fields)
             # TODO: Figure out why this is needed, temporarily disabled
             # if len(ef) != len(active_mask):
             #     ef = ef + [{}] * (len(active_mask) - len(ef))
-            active_extra_fields = [ef[i] for i in range(len(ef)) if active_mask[i]]
-            batch_data['extra_fields'] = active_extra_fields
+            # active_extra_fields = [ef[i] for i in range(len(ef)) if active_mask[i]]
+            batch_data['extra_fields'] = extra_fields
         print(f" - Number of finished responses: {len([x for x in do_actions if not x])} / {len(do_actions)}")
         response = self.send_batch_requests(batch_data)
         active_observations = response['observations']
