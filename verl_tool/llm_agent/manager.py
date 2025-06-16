@@ -90,7 +90,7 @@ class AgentActorManager:
         if self.config.mtrl_sep is None:
             messages = [{"role": "system", "content": "{obs}"}]
             self.config.mtrl_sep = "\n" + self.tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
-
+            self.config.mtrl_sep = self.config.mtrl_sep.replace("system", self.config.mtrl_role)
     def _batch_tokenize(self, responses: List[str]) -> torch.Tensor:
         """Tokenize a batch of responses."""
         return self.tokenizer(
@@ -139,7 +139,7 @@ class AgentActorManager:
         if self.config.enable_mtrl:
             responses_str = [self.tokenizer.decode(responses[i][:effective_lens[i]], skip_special_tokens=False) for i in range(responses.shape[0])]
             for i in range(len(responses_str)):
-                if action_step >= self.config.min_action_num:
+                if action_step >= self.config.min_turns:
                     if self.action_stop_tokens:
                         if any([action_stop_token in responses_str[i] for action_stop_token in self.action_stop_tokens]):
                             do_action = True
@@ -176,17 +176,17 @@ class AgentActorManager:
             )
             for i, resp in enumerate(responses_str):
                 # resp = resp.strip(' \n')
-                if action_step >= self.config.min_action_num:
-                    has_action = False
-                    for j in range(len(self.action_stop_tokens)):
-                        if self.action_stop_tokens[j] in resp:
-                        # if resp.endswith(self.action_stop_tokens[j]):
-                        # if self.action_stop_tokens[j] in resp[-(len(self.action_stop_tokens[j]) + 3):]: # 5 for some action token tokens not indepdently decoded
-                            has_action = True
-                            responses_str[i] = resp.split(self.action_stop_tokens[j])[0] + self.action_stop_tokens[j]
-                            break
-                else:
+                has_action = False
+                for j in range(len(self.action_stop_tokens)):
+                    if self.action_stop_tokens[j] in resp:
+                    # if resp.endswith(self.action_stop_tokens[j]):
+                    # if self.action_stop_tokens[j] in resp[-(len(self.action_stop_tokens[j]) + 3):]: # 5 for some action token tokens not indepdently decoded
+                        has_action = True
+                        responses_str[i] = resp.split(self.action_stop_tokens[j])[0] + self.action_stop_tokens[j]
+                        break
+                if not has_action and action_step < self.config.min_turns:
                     has_action = True
+                    responses_str[i] = resp + self.action_stop_tokens[0]
                 do_actions.append(has_action)
             for i in range(len(responses_str)):
                 if not do_actions[i]:
@@ -212,7 +212,7 @@ class AgentActorManager:
     #     responses = responses[:, :max_len]
     #     responses_str = [self.tokenizer.decode(responses[i][:effective_lens[i]], skip_special_tokens=True) for i in range(responses.shape[0])]
 
-    #     if action_step < self.config.min_action_num:
+    #     if action_step < self.config.min_turns:
     #         # re-encode remove special tokens like eos
     #         responses = self._batch_tokenize(responses_str).to(torch.int64)
     #         # force do action for those effective len not equal to full len
@@ -800,11 +800,10 @@ class AgentActorManager:
             "is_last_step": [is_last_step] * len(finishs)
         }
         if extra_fields is not None:
-            # active_extra_fields = [extra_fields[i] for i in range(len(extra_fields)) if active_mask[i]]
-            # batch_data['extra_fields'] = active_extra_fields.tolist() if isinstance(active_extra_fields, np.ndarray) else active_extra_fields
             ef = list(extra_fields)
-            if len(ef) != len(active_mask):
-                ef = ef + [{}] * (len(active_mask) - len(ef))
+            # TODO: Figure out why this is needed, temporarily disabled
+            # if len(ef) != len(active_mask):
+            #     ef = ef + [{}] * (len(active_mask) - len(ef))
             active_extra_fields = [ef[i] for i in range(len(ef)) if active_mask[i]]
             batch_data['extra_fields'] = active_extra_fields
         print(f" - Number of finished responses: {len([x for x in do_actions if not x])} / {len(do_actions)}")

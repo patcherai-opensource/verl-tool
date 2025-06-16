@@ -5,7 +5,7 @@ val_data=[$(pwd)/data/mathcoder/code_test.parquet,\
 $(pwd)/data/math_torl/math500_test.parquet,\
 $(pwd)/data/math_torl/aime24_test.parquet,\
 $(pwd)/data/math_torl/aime25_test.parquet]
-model_name=Qwen/Qwen2.5-7B
+model_name=Qwen/Qwen2.5-Math-7B
 rl_alg=grpo # gae(ppo) or grpo, if grpo, then better set n>1 otherwise the group norm can not be effective
 n_gpus_per_node=8
 n_nodes=1
@@ -28,36 +28,31 @@ lr=1e-6
 reward_manager=mathcoder
 ppo_micro_batch_size_per_gpu=1
 log_prob_micro_batch_size_per_gpu=2
-tensor_model_parallel_size=2
+tensor_model_parallel_size=1
 gpu_memory_utilization=0.8 # higher gpu_memory_utilization will likely cause the vllm to OOM and get stuck, so set it to a lower value like 0.4 or 0.5
 do_offload=True # control actor's fsdp.[param|optimizer]_offload and actor_rollout_ref.rollout.fsdp.[param|optimizer]_offload; if gpu_memory_utilization is set to > 0.6, then do_offload should be set to True otherwise it will cause OOM
 use_dynamic_bsz=False # faster
 ulysses_sequence_parallel_size=1 # set to 1 for normal verl behavior, otherwise it will cause OOM
 
 model_pretty_name=$(echo $model_name | tr '/' '_' | tr '[:upper:]' '[:lower:]')
-run_name_postfix=""
+run_name_postfix="new"
 run_name="${reward_manager}-${strategy}-${model_pretty_name}-${rl_alg}-n${n}-b${batch_size}-t${temperature}-lr${lr}${run_name_postfix}"
 export VERL_RUN_ID=$run_name
 
 # temp file for action tokens as verl cannot pass special strs as params
 mkdir -p $(pwd)/tmp
 action_stop_tokens_file="$(pwd)$(mktemp)"
-echo "$action_stop_tokens" | tee $action_stop_tokens_file
+echo -e -n "$action_stop_tokens" | tee $action_stop_tokens_file
 echo "action_stop_tokens_file=$action_stop_tokens_file"
 
 host=$(hostname -I | awk '{print $1}')
 port=$(shuf -i 30000-31000 -n 1)
 tool_server_url=http://$host:$port/get_observation
-python -m verl_tool.servers.ray_serve --host $host --port $port --tool_type "firejail_python_code" --workers_per_tool $n &
+python -m verl_tool.servers.serve --host $host --port $port --tool_type "python_code" --workers_per_tool 32 &
 server_pid=$!
 echo "Server (pid=$server_pid) started at $tool_server_url"
 
-
-
-ray job submit --address="http://127.0.0.1:8265" \
-    --runtime-env=verl_tool/trainer/runtime_env.yaml \
-    -- \
-    PYTHONUNBUFFERED=1 python3 -m verl_tool.trainer.main_ppo \
+PYTHONUNBUFFERED=1 python3 -m verl_tool.trainer.main_ppo \
     algorithm.adv_estimator=$rl_alg \
     data.train_files=$train_data \
     data.val_files=$val_data \
@@ -93,6 +88,8 @@ ray job submit --address="http://127.0.0.1:8265" \
     +actor_rollout_ref.agent.action_stop_tokens=$action_stop_tokens_file \
     actor_rollout_ref.rollout.tensor_model_parallel_size=$tensor_model_parallel_size \
     actor_rollout_ref.rollout.log_prob_micro_batch_size_per_gpu=$log_prob_micro_batch_size_per_gpu \
+    actor_rollout_ref.rollout.enforce_eager=False \
+    actor_rollout_ref.rollout.free_cache_engine=False \
     actor_rollout_ref.rollout.name=vllm \
     actor_rollout_ref.rollout.gpu_memory_utilization=$gpu_memory_utilization \
     actor_rollout_ref.rollout.temperature=$temperature \

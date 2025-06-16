@@ -50,7 +50,13 @@ Now start thinking and generate the final program in a markdown code block like 
 math_system_prompt = '''A conversation between User and Assistant. The user asks a question, and the Assistant solves it. The assistant first thinks about the reasoning process in the mind and then provides the user with the answer. User: Please integrate natural language reasoning with programs to solve the problem above, and put your final answer within \\boxed{}.
 '''
 
-mathcoder_system_prompt = '''A conversation between User and Assistant. The user asks a question, and the Assistant solves it. The assistant first thinks about the reasoning process in the mind and then provides the user with the answer. User: Please integrate natural language reasoning with programs to solve the problem above. For math problems, please put your final answer within \\boxed{}. For code problems, please put your final answer in a markdown code block like this: ```python\nyour code here\n```.
+mathcoder_system_prompt = '''A conversation between User and Assistant. The user asks a question, and the Assistant solves it. The assistant first thinks about the reasoning process in the mind and then provides the user with the answer. User: Please integrate natural language reasoning with programs to solve the problem above. The execution result for a code block will be put in the a "output" markdown block if you want to run it. For math problems, please put your final answer within \\boxed{}. For code problems, please put your final answer in a markdown code block like this: ```python\nyour code here\n```.
+'''
+
+mathcoder_system_prompt_v2 = '''A conversation between User and Assistant. The user asks a question, and the Assistant solves it. The assistant first thinks about the reasoning process in the mind and then provides the user with the answer. Please integrate natural language reasoning with programs to solve the problem above. If you want to run any python code, write code in the python markdown code block and the execution will be appended in an output code block like "```python\nyour code here\n```\n```output\nresult here\n```". For math problems, please put your final answer within \\boxed{}. For code problems, please put your final answer in a markdown code block like this: ```python\nyour code here\n```.
+'''
+
+mathcoder_system_prompt_v3 = '''A conversation between User and Assistant. The user asks a question, and the Assistant solves it. The assistant first thinks about the reasoning process in the mind and then provides the user with the answer. Please integrate natural language reasoning with programs to solve the problem above. For math problems, please put your final answer within \\boxed{}. For code problems, please put your final answer in a markdown code block like this: ```python\nyour code here\n```.
 '''
 
 ### Utils ###
@@ -66,13 +72,20 @@ def main(
     hdfs_dir: str = None,
     level: str = 'hard',
     add_execution_prompt: bool = False,
-    detaield_instruction: bool = False
+    detaield_instruction: bool = False,
+    sys_prompt_version: str = 'v1',
 ):
+    global mathcoder_system_prompt
+    if sys_prompt_version == 'v2':
+        mathcoder_system_prompt = mathcoder_system_prompt_v2
+    elif sys_prompt_version == 'v3':
+        mathcoder_system_prompt = mathcoder_system_prompt_v3
     local_dir = Path(local_dir)
     local_dir.mkdir(parents=True, exist_ok=True)
 
     _process_acecoder(code_dataset_path, local_dir, add_execution_prompt, detaield_instruction)
     _process_math(math_dataset_path, local_dir, hdfs_dir, level)
+    _process_torl_math(code_dataset_path, local_dir)
 
 ### AceCoder Logic ###
 def _process_acecoder(dataset_path, local_dir, add_execution_prompt, detaield_instruction):
@@ -115,14 +128,15 @@ def _process_acecoder(dataset_path, local_dir, add_execution_prompt, detaield_in
                 "ability": "code",
                 "reward_model": {
                     "style": "rule",
-                    "ground_truth": ""
+                    "ground_truth": None,
                 },
                 "extra_info": {
                     'split': split,
                     'index': idx,
                     'id': example['id'],
                     "question": question_raw,
-                    "ground_truth": tests
+                    "test_cases": tests,
+                    "inputs_outputs": None,
                 }
             }
             return data
@@ -137,6 +151,22 @@ def _process_acecoder(dataset_path, local_dir, add_execution_prompt, detaield_in
     test_dataset.to_parquet(local_dir / 'code_test.parquet')
     print(f"Saved AceCoder data to {local_dir}")
 
+def _process_torl_math(dataset_path, local_dir):
+    dataset = datasets.load_dataset("VerlTool/ToRL-Math", split="train")
+    def make_map_fn(item, idx):
+        assert item['prompt'][0]['role'] == 'system', f"Expected system role, got {item['prompt'][0]['role']}"
+        item['prompt'][0]['system'] = mathcoder_system_prompt
+        item['extra_info'].update({
+            'split': 'train',
+            'index': idx,
+            'id': item['extra_info']['id'],
+            'question': item['prompt'][1]['content'],
+            'ground_truth': item['reward_model']['ground_truth']
+        })
+        return item
+    dataset = dataset.map(make_map_fn, with_indices=True)
+    dataset.to_parquet(local_dir / 'torl_math_train.parquet')
+    print(f"Saved ToRL-Math data to {local_dir}")
 
 ### Math Dataset Logic ###
 def _process_math(data_source, local_dir, hdfs_dir, level):
@@ -278,9 +308,7 @@ def _process_math(data_source, local_dir, hdfs_dir, level):
                 "extra_info": {
                     'split': split,
                     'index': idx,
-                    'id': 'NULL',
                     'question': question,
-                    "ground_truth": np.array([0]) 
                 }
             }
             return data
@@ -302,5 +330,7 @@ if __name__ == '__main__':
     fire.Fire(main)
 
 """
-python examples/data_preprocess/mathcoder.py 
+python examples/data_preprocess/mathcoder.py --code_dataset_path chiruan/CodeDPO-AceCoderV2-150K-processed-Qwen32B-inference --local_dir data/mathcoder --add_execution_prompt 
+python examples/data_preprocess/mathcoder.py --code_dataset_path chiruan/CodeDPO-AceCoderV2-150K-processed-Qwen32B-inference --local_dir data/mathcoder_v2 --add_execution_prompt --sys_prompt_version v2
+python examples/data_preprocess/mathcoder.py --code_dataset_path chiruan/CodeDPO-AceCoderV2-150K-processed-Qwen32B-inference --local_dir data/mathcoder_v3 --add_execution_prompt --sys_prompt_version v3
 """

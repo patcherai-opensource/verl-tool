@@ -37,7 +37,7 @@ class BaseTool:
         self.num_workers = num_workers
         registered_tools[self.tool_type] = self.__class__
         self.env_cache = {}
-        self.executor = ThreadPoolExecutor(max_workers=num_workers)
+        # self.executor = ThreadPoolExecutor(max_workers=num_workers)
     
     def get_usage_inst(self):
         """
@@ -72,7 +72,7 @@ class BaseTool:
         """
         self.env_cache[trajectory_id] = env
     
-    def update_env(self, trajectory_id, env, action, is_valid, extra_field, observation):
+    def update_env(self, trajectory_id, env, action, is_valid, extra_field, observation, **kwargs):
         """
         Update the environment for the given trajectory_id
         """
@@ -82,12 +82,14 @@ class BaseTool:
             "is_valid": is_valid,
             "observation": observation,
             "extra_field": extra_field,
+            **kwargs
         })
     
     def delete_env(self, trajectory_id):
         """
         Delete the environment for the given trajectory_id
         """
+        # import json
         if trajectory_id in self.env_cache:
             del self.env_cache[trajectory_id]
     
@@ -141,14 +143,13 @@ class BaseTool:
             dones: The list of done flags
             valids: The list of valid flags
         """
-        # results = [
-        #     self.conduct_action(trajectory_id, action, extra_field)
-        #     for trajectory_id, action, extra_field in tqdm(zip(trajectory_ids, actions, extra_fields),
-        # ]
-        results = list(tqdm(self.executor.map(self.conduct_action, trajectory_ids, actions, extra_fields),
-                                        total=len(trajectory_ids), desc=f"Getting observations using tool {self.tool_type}", 
-                                        disable=False))
-            
+        with ThreadPoolExecutor(max_workers=min(self.num_workers, len(trajectory_ids))) as executor:
+            results = list(tqdm(executor.map(self.conduct_action, trajectory_ids, actions, extra_fields),
+                                            total=len(trajectory_ids), desc=f"Getting observations using tool {self.tool_type}", 
+                                            disable=False))
+        for i in range(len(trajectory_ids)):
+            if extra_fields[i].get('is_last_step', False):
+                self.delete_env(trajectory_ids[i])
         observations, dones, valids = zip(*results)
         return observations, dones, valids
 

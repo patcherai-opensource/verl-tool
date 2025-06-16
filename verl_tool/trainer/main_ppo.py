@@ -62,7 +62,7 @@ def main(config):
                 'NCCL_DEBUG': 'WARN',
                 'VLLM_LOGGING_LEVEL': 'WARN',
             }
-        })
+        }, num_cpus=32)
 
     runner = TaskRunner.remote()
     ray.get(runner.run.remote(config))

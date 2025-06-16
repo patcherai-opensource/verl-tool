@@ -30,6 +30,5 @@ class FinishTool(BaseTool):
         for tool in self.other_tools:
             if tool.has_env(trajectory_id):
                 tool.delete_env(trajectory_id)
-            print(f"Deleted environment for {tool.tool_type} with trajectory_id {trajectory_id}")
         return observation, done, is_valid
     

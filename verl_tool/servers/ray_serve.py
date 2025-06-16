@@ -4,7 +4,9 @@ import logging
 from typing import Dict, List, Optional, Tuple, Any, Union
 from fastapi import FastAPI, Request
 import uvicorn
+import time
 from collections import defaultdict
+from .tools import get_tool_cls
 
 # Initialize Ray
 if not ray.is_initialized():
@@ -21,58 +23,44 @@ from .tools import get_tool_cls, ALL_TOOLS
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+        
+@ray.remote(num_cpus=0)
+def ray_execute(tool, trajectory_id: str, action: str, extra_field: Dict[str, Any]):
+    """
+    Execute a single tool action.
+    
+    Args:
+        trajectory_id: Unique identifier for the trajectory
+        action: The action string to execute
+        extra_field: Additional data for the action
+        
+    Returns:
+        tuple: (observation, done, valid) result of the action
+    """
+    return tool.conduct_action(trajectory_id, action, extra_field)
+    
+@ray.remote(num_cpus=0)
+def ray_parse_action(tool, action: str):
+    """
+    Check if this tool can handle the action.
+    
+    Args:
+        action: The action string to parse
+        
+    Returns:
+        tuple: (parsed_action, valid)
+    """
+    return tool.parse_action(action)
 
-# Ray actors for tools
-@ray.remote
-class RayToolWorker:
-    """Ray actor for executing tool operations"""
+@ray.remote(num_cpus=0)
+def ray_get_usage_inst(tool):
+    """
+    Get usage instructions for this tool.
     
-    def __init__(self, tool_type: str):
-        """
-        Initialize a worker for a specific tool type.
-        
-        Args:
-            tool_type: The type of tool this worker will handle
-        """
-        from .tools import get_tool_cls
-        self.tool_type = tool_type
-        # Create a single-worker tool instance (parallelization handled by Ray)
-        self.tool = get_tool_cls(tool_type)()
-        
-    def execute(self, trajectory_id: str, action: str, extra_field: Dict[str, Any]):
-        """
-        Execute a single tool action.
-        
-        Args:
-            trajectory_id: Unique identifier for the trajectory
-            action: The action string to execute
-            extra_field: Additional data for the action
-            
-        Returns:
-            tuple: (observation, done, valid) result of the action
-        """
-        return self.tool.conduct_action(trajectory_id, action, extra_field)
-        
-    def parse_action(self, action: str):
-        """
-        Check if this tool can handle the action.
-        
-        Args:
-            action: The action string to parse
-            
-        Returns:
-            tuple: (parsed_action, valid)
-        """
-        return self.tool.parse_action(action)
-    
-    def get_usage_inst(self):
-        """
-        Get usage instructions for this tool.
-        
-        Returns:
-            str: The usage instructions
-        """
-        return self.tool.get_usage_inst()
+    Returns:
+        str: The usage instructions
+    """
+    return tool.get_usage_inst()
 
 
 class RayToolManager:
@@ -103,17 +91,11 @@ class RayToolManager:
                 continue  # Handle finish tool separately
                 
             # Create multiple workers for each tool type for parallelization
-            self.tool_workers[tool_type] = [
-                RayToolWorker.remote(tool_type) 
-                for _ in range(self.workers_per_tool)
-            ]
+            self.tool_workers[tool_type] = get_tool_cls(tool_type)()
         
         # Initialize finish tool (if needed)
         if "finish" not in self.tool_workers:
-            self.tool_workers["finish"] = [
-                RayToolWorker.remote("finish") 
-                for _ in range(self.workers_per_tool)
-            ]
+            self.tool_workers["finish"] = get_tool_cls("finish")()
             
         # Log available vs. active tools with emoji indicators
         logger.info("Available Tools:")
@@ -141,13 +123,13 @@ class RayToolManager:
             return "finish"
             
         # Try each tool type with Ray
-        for tool_type, workers in self.tool_workers.items():
+        for tool_type, worker in self.tool_workers.items():
             if tool_type == "finish":
                 continue
                 
             # Use the first worker to check validity
             _, valid_ref = await asyncio.to_thread(
-                ray.get, workers[0].parse_action.remote(action)
+                ray.get, ray_parse_action.remote(worker, action)
             )
             
             if valid_ref:
@@ -164,8 +146,8 @@ class RayToolManager:
         """
         # Collect usage instructions from one worker of each type
         futures = {
-            tool_type: workers[0].get_usage_inst.remote()
-            for tool_type, workers in self.tool_workers.items()
+            tool_type: ray_get_usage_inst.remote(worker)
+            for tool_type, worker in self.tool_workers.items()
             if tool_type != "finish"
         }
         
@@ -204,12 +186,11 @@ class RayToolManager:
         dones = [False] * len(actions)
         valids = [False] * len(actions)
         
-        @ray.remote
+        @ray.remote(num_cpus=0)
         def non_tool_action(trajectory_id: str, action: str, extra_field: Dict[str, Any]):
-            return "", False, False # no observation if no tool matched
+            return "", False, False # no observation if no tool matched, [obs, done, valid]
         
         pending_refs = []
-        tool_worker_idx = defaultdict(int)
         for i, tool_type in enumerate(tool_types):
             trajectory_id = trajectory_ids[i]
             action = actions[i]
@@ -219,11 +200,8 @@ class RayToolManager:
                 # Handle actions with no matching tool
                 result_ref = non_tool_action.remote(trajectory_id, action, extra_field)
             else:
-                workers = self.tool_workers[tool_type]
-                worker_idx = tool_worker_idx[tool_type]
-                tool_worker_idx[tool_type] = (worker_idx + 1) % len(workers)
-                worker = workers[worker_idx]
-                result_ref = worker.execute.remote(trajectory_id, action, extra_field)
+                worker = self.tool_workers[tool_type]
+                result_ref = ray_execute.remote(worker, trajectory_id, action, extra_field)
             pending_refs.append(result_ref)
         
         # Get results as they complete
@@ -275,6 +253,9 @@ class RayToolServer:
             version="1.0.0"
         )
         
+        # Initialize processing tasks dictionary for handling duplicates
+        self.processing_tasks = {}
+        
         # Configure routes
         self._configure_app()
         
@@ -288,6 +269,44 @@ class RayToolServer:
                 # Parse request
                 data = await request.json()
                 
+                # Generate hash for duplicate detection
+                from .utils import hash_requests  # Assuming the same hash_requests function
+                data_hash_str = hash_requests(data)
+                logger.debug(f"Request hash: {data_hash_str}")
+                
+                # Check for duplicate requests
+                if data_hash_str in self.processing_tasks:
+                    logger.info(f"Duplicate request detected: {data_hash_str}")
+                    # Wait for the original request to complete
+                    task_info = self.processing_tasks[data_hash_str]
+                    # Increment reference count
+                    task_info["ref_count"] += 1
+                    
+                    # Wait for result
+                    while task_info["result"] is None:
+                        if task_info.get("error"):
+                            # Original request failed, re-process this one
+                            logger.warning(f"Original request failed, processing duplicate: {data_hash_str}")
+                            break
+                        # Wait before checking again
+                        await asyncio.sleep(0.2)
+                    
+                    # If we have a valid result, return it
+                    if task_info["result"] is not None:
+                        logger.debug(f"Returning cached result for {data_hash_str}")
+                        # Schedule reference count decrement
+                        asyncio.create_task(self._decrement_ref_count(data_hash_str))
+                        return task_info["result"]
+                
+                # Register new request or process duplicate after original failed
+                if data_hash_str not in self.processing_tasks:
+                    self.processing_tasks[data_hash_str] = {
+                        "ref_count": 1,
+                        "result": None,
+                        "error": None,
+                        "start_time": time.time()
+                    }
+                
                 try:
                     # Normalize trajectory IDs
                     if "trajectory_ids" in data:
@@ -297,8 +316,15 @@ class RayToolServer:
                     # Validate and process request
                     trajectory_ids = data.get("trajectory_ids", [])
                     actions = data.get("actions", [])
+                    
+                    # Extract extra fields
                     if 'extra_fields' in data.keys():
                         extra_fields = data['extra_fields']
+                        for key in data.keys():
+                            assert len(data[key]) == len(trajectory_ids), f"Length of {key} ({len(data[key])}) does not match trajectory_ids ({len(trajectory_ids)})"
+                            if key not in ["trajectory_ids", "actions", "extra_fields"]:
+                                for i in range(len(trajectory_ids)):
+                                    extra_fields[i][key] = data[key][i]
                         assert len(extra_fields) == len(trajectory_ids)
                     else:
                         extra_keys = [k for k in data.keys() if k not in ["trajectory_ids", "actions"]]
@@ -308,41 +334,79 @@ class RayToolServer:
                         ]
                     
                     # Process with Ray
+                    start = time.time()
+                    logger.info(f"Processing {len(trajectory_ids)} actions")
                     observations, dones, valids = await self.tool_manager.process_actions(
                         trajectory_ids, actions, extra_fields
                     )
-                    # import json
-                    # with open("tool_results.json", 'w') as f:
-                    #     json.dump({"observations": observations, "dones": dones, "valids": valids}, f, indent=4)
-                    #     print(f"Results saved to tool_results.json")
-                    return {
+                    end = time.time() - start
+                    logger.info(f"Processed {len(trajectory_ids)} actions in {end:.2f} seconds")
+                    
+                    # Create response
+                    response = {
                         "observations": observations, 
                         "dones": dones, 
                         "valids": valids
                     }
                     
+                    # Store result for duplicates
+                    if data_hash_str in self.processing_tasks:
+                        self.processing_tasks[data_hash_str]["result"] = response
+                        # Schedule reference count decrement
+                        asyncio.create_task(self._decrement_ref_count(data_hash_str))
+                    
+                    return response
+                    
                 except Exception as e:
                     logger.error(f"Error processing request: {e}", exc_info=True)
+                    # Mark task as failed
+                    if data_hash_str in self.processing_tasks:
+                        self.processing_tasks[data_hash_str]["error"] = str(e)
+                        # Schedule task removal
+                        asyncio.create_task(self._decrement_ref_count(data_hash_str))
                     return {"error": str(e)}, 500
         
         @self.app.get("/health")
         async def health_check():
-            return {"status": "healthy", "ray_status": "connected" if ray.is_initialized() else "disconnected"}
+            return {
+                "status": "healthy", 
+                "ray_status": "connected" if ray.is_initialized() else "disconnected",
+                "active_tasks": len(self.processing_tasks)
+            }
+    
+    async def _decrement_ref_count(self, data_hash_str):
+        """Decrement reference count and clean up completed tasks"""
+        if data_hash_str in self.processing_tasks:
+            self.processing_tasks[data_hash_str]["ref_count"] -= 1
             
+            # If no more references, remove the task
+            if self.processing_tasks[data_hash_str]["ref_count"] <= 0:
+                # Calculate processing time
+                start_time = self.processing_tasks[data_hash_str].get("start_time", 0)
+                processing_time = time.time() - start_time
+                
+                # Log cleanup
+                logger.debug(f"Removing completed task {data_hash_str} (processed in {processing_time:.2f}s)")
+                del self.processing_tasks[data_hash_str]
+                
+                # Optionally, you could run garbage collection here if memory usage is a concern
+                # import gc
+                # gc.collect()
+                
     def start(self):
         """Start the server"""
         logger.info(f"Starting Ray Tool Server on {self.host}:{self.port}")
         uvicorn.run(self.app, host=self.host, port=self.port, log_level="info")
-
 
 # CLI entry point
 def main(
     tool_type: Union[str, Tuple[str]] = "base",
     host: str = "0.0.0.0",
     port: int = 5000,
-    workers_per_tool: int = 4,
+    workers_per_tool: int = 16,
     max_concurrent_requests: int = 64,
-    ray_address: Optional[str] = None
+    ray_address: Optional[str] = None,
+    slient=False,
 ):
     """
     Start the Ray Tool Server.
@@ -377,6 +441,11 @@ def main(
         workers_per_tool=workers_per_tool,
         max_concurrent_requests=max_concurrent_requests
     )
+    if slient:
+        import sys
+        import os
+        sys.stdout = open(os.devnull, 'w')
+        sys.stderr = open(os.devnull, 'w')
     server.start()
 
 
