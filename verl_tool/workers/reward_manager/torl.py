@@ -19,10 +19,11 @@ from pathlib import Path
 from verl import DataProto
 from .reward_score import _default_compute_score
 from .reward_score.torl_math import compute_score as torl_compute_score
+from verl.workers.reward_manager import register
 import torch
 from collections import defaultdict
 
-
+@register("torl")
 class ToRLRewardManager:
     """The reward manager.
     """
@@ -147,6 +148,7 @@ class ToRLRewardManager:
             response_ids = data_item.batch['responses']
             valid_response_length = data_item.batch['attention_mask'][prompt_length:].sum()
             valid_response_ids = response_ids[:valid_response_length]
+            valid_response_ids_with_loss_mask = data_item.batch['responses_with_loss_mask'][:valid_response_length]
 
             # decode
             prompt_str = self.tokenizer.decode(valid_prompt_ids, skip_special_tokens=True)
@@ -205,6 +207,7 @@ class ToRLRewardManager:
                 'data_source': data_source,
                 "prompt": self.tokenizer.decode(prompt_ids[-valid_prompt_length:], skip_special_tokens=False),
                 "response": self.tokenizer.decode(response_ids[:valid_response_length], skip_special_tokens=False),
+                'response_with_loss_mask': self.tokenizer.decode(valid_response_ids_with_loss_mask, skip_special_tokens=False) if 'responses_with_loss_mask' in data_item.batch else None,
                 'ground_truth': ground_truth,
                 'score': score,
                 'reward': reward,

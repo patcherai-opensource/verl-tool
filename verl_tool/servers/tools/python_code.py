@@ -3,6 +3,7 @@ add-apt-repository ppa:deki/firejail
 apt-get update
 DEBIAN_FRONTEND=noninteractive apt-get -y install firejail firejail-profiles
 """
+import ray
 from .base import BaseTool, register_tool
 import regex as re
 import subprocess
@@ -13,8 +14,9 @@ import resource
 from typing import Tuple, Dict, Any, Optional, Union, List
 
 # Timeout for code execution in seconds
-TIMEOUT = 5
+TIMEOUT = 10
 PRE_IMPORT_LIBS = "from string import *\nfrom re import *\nfrom datetime import *\nfrom collections import *\nfrom heapq import *\nfrom bisect import *\nfrom copy import *\nfrom math import *\nfrom random import *\nfrom statistics import *\nfrom itertools import *\nfrom functools import *\nfrom operator import *\nfrom io import *\nfrom sys import *\nfrom json import *\nfrom builtins import *\nfrom typing import *\nimport string\nimport re\nimport datetime\nimport collections\nimport heapq\nimport bisect\nimport copy\nimport math\nimport random\nimport statistics\nimport itertools\nimport functools\nimport operator\nimport io\nimport sys\nimport json\nsys.setrecursionlimit(6*10**5)\n\n"
+filejail_command_exists = shutil.which("firejail") is not None
 
 def check_forbidden_imports(code: str) -> bool:
     """
@@ -144,13 +146,13 @@ def clean_traceback(text, base_path):
 
 # Set resource limits directly
 def set_limits():
-    # Memory limit (512MB)
-    resource.setrlimit(resource.RLIMIT_AS, (512*1024*1024, 512*1024*1024))
-    # Process limit
-    resource.setrlimit(resource.RLIMIT_NPROC, (16, 16))
-    # File size limit
-    resource.setrlimit(resource.RLIMIT_FSIZE, (100*1024*1024, 100*1024*1024))
-    
+    # Memory limit (8GB)
+    resource.setrlimit(resource.RLIMIT_AS, (4 * 1024**3, resource.RLIM_INFINITY))
+    # # Process limit
+    resource.setrlimit(resource.RLIMIT_CPU, (TIMEOUT, resource.RLIM_INFINITY))
+    # File size limit (500 MB)
+    resource.setrlimit(resource.RLIMIT_FSIZE, (500*1024*1024, 500*1024*1024))
+
 def execute_python(code: Union[str, List[str]], timeout: int=TIMEOUT, stdin: Optional[str] = None, python_path: str = None, pre_import_lib: bool = False, use_firejail: bool=False) -> Tuple[str, bool]:
     """
     Execute Python code in a Firejail sandbox with a timeout.
@@ -188,7 +190,6 @@ def execute_python(code: Union[str, List[str]], timeout: int=TIMEOUT, stdin: Opt
     else:
         assert os.path.exists(python_path), f"Python path {python_path} does not exist."
     
-    filejail_command_exists = shutil.which("firejail") is not None
     if use_firejail and filejail_command_exists:
         env = {}
         # Core system variables
@@ -238,23 +239,26 @@ def execute_python(code: Union[str, List[str]], timeout: int=TIMEOUT, stdin: Opt
         result = subprocess.run(
             command,
             input=stdin if stdin else None,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
             env=env,
             text=True,
+            capture_output=True,
+            preexec_fn=set_limits,
             timeout=timeout,
             cwd=subprocess_cwd,
         )
         # Clean both stdout and stderr
         stdout = clean_traceback(result.stdout, cwd)
         stderr = clean_traceback(result.stderr, cwd)
-        
+        stderr = stderr if stderr else ""
         if stderr:
             has_error = True
-    except subprocess.TimeoutExpired:
+    except subprocess.TimeoutExpired as e:
         has_error = True
-        stdout = ""
-        stderr = f"Execution timed out after {timeout} seconds.\n"
+        stdout = e.stdout if e.stdout else ""
+        stderr = e.stderr if e.stderr else ""
+        stdout = stdout.decode('utf-8') if isinstance(stdout, bytes) else stdout
+        stderr = stderr.decode('utf-8') if isinstance(stderr, bytes) else stderr
+        stderr += f"Execution timed out after {timeout} seconds.\n"
     # Clean up the temporary file
     try:
         # remove cwd
@@ -262,7 +266,9 @@ def execute_python(code: Union[str, List[str]], timeout: int=TIMEOUT, stdin: Opt
             shutil.rmtree(cwd)
     except Exception as e:
         pass
-    return stdout, (stderr if stderr else ""), has_error
+    assert isinstance(stdout, str), f"Expected stdout to be a string, got {type(stdout)}"
+    assert isinstance(stderr, str), f"Expected stderr to be a string, got {type(stderr)}"
+    return stdout, stderr, has_error
 
 @register_tool
 class PythonCodeTool(BaseTool):

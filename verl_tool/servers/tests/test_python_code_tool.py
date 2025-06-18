@@ -38,7 +38,14 @@ def test_python(
     print("--- Testing 6 ---") # syntax error
     action = """```<python>prnit('Hello from Python!')</python> ..."""
     print(_send_test_request(url, trajectory_id, action, "Python"))
-    
+
+    print("--- Testing 7 ---") # memory limit
+    action = """```<python>\nimport numpy as np\nx = np.random.rand(5000, 5000)\nsize_of_x_in_bytes = x.nbytes\nprint(f'Memory test completed after allocating a {len(x)}x{len(x[0])} array, which is {size_of_x_in_bytes / (1024 * 1024):.2f} MB.')</python> ...```"""
+    print(_send_test_request(url, trajectory_id, action, "Python Memory Test"))
+
+    print("--- Testing 7 ---") # memory limit
+    action = """```<python>\nimport numpy as np\nx = np.random.rand(40000, 40000)\nsize_of_x_in_bytes = x.nbytes\nprint(f'Memory test completed after allocating a {len(x)}x{len(x[0])} array, which is {size_of_x_in_bytes / (1024 * 1024):.2f} MB.')</python> ...```"""
+    print(_send_test_request(url, trajectory_id, action, "Python Memory Test"))
     return True
     
     

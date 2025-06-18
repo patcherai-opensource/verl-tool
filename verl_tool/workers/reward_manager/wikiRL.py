@@ -12,6 +12,7 @@ import regex as re
 from pathlib import Path
 from concurrent.futures import ProcessPoolExecutor
 from functools import partial
+from verl.workers.reward_manager import register
 
 from mini_webarena.rl_utils import format_score
 from mini_webarena.evaluator import metric_heuristic
@@ -23,7 +24,7 @@ def clean_text(text):
     # 删除控制字符 & 非打印字符
     return re.sub(r'[\x00-\x1F\x7F-\x9F\u200b-\u200f\u2028-\u202f\u2060-\u206f]', '', text)
 
-
+@register("wikiRL")
 class WikiRLRewardManager:
     """
     Reward Manager for the WikiRL dataset.
@@ -217,14 +218,14 @@ if __name__ == '__main__':
 (TaskRunner pid=2019847) DataProto(batch=TensorDict(
 (TaskRunner pid=2019847)     fields={
 (TaskRunner pid=2019847)         attention_mask: Tensor(shape=torch.Size([4, 8192]), device=cpu, dtype=torch.int64, is_shared=False),
-(TaskRunner pid=2019847)         info_mask: Tensor(shape=torch.Size([4, 8192]), device=cpu, dtype=torch.int64, is_shared=False),
+(TaskRunner pid=2019847)         loss_mask: Tensor(shape=torch.Size([4, 8192]), device=cpu, dtype=torch.int64, is_shared=False),
 (TaskRunner pid=2019847)         input_ids: Tensor(shape=torch.Size([4, 8192]), device=cpu, dtype=torch.int64, is_shared=False),
 (TaskRunner pid=2019847)         old_log_probs: Tensor(shape=torch.Size([4, 4096]), device=cpu, dtype=torch.float32, is_shared=False),
 (TaskRunner pid=2019847)         position_ids: Tensor(shape=torch.Size([4, 8192]), device=cpu, dtype=torch.int64, is_shared=False),
 (TaskRunner pid=2019847)         prompts: Tensor(shape=torch.Size([4, 4096]), device=cpu, dtype=torch.int64, is_shared=False),
 (TaskRunner pid=2019847)         ref_log_prob: Tensor(shape=torch.Size([4, 4096]), device=cpu, dtype=torch.float32, is_shared=False),
 (TaskRunner pid=2019847)         responses: Tensor(shape=torch.Size([4, 4096]), device=cpu, dtype=torch.int64, is_shared=False),
-(TaskRunner pid=2019847)         responses_with_info_mask: Tensor(shape=torch.Size([4, 4096]), device=cpu, dtype=torch.int64, is_shared=False)},
+(TaskRunner pid=2019847)         responses_with_loss_mask: Tensor(shape=torch.Size([4, 4096]), device=cpu, dtype=torch.int64, is_shared=False)},
 (TaskRunner pid=2019847)     batch_size=torch.Size([4]),
 (TaskRunner pid=2019847)     device=None,
 (TaskRunner pid=2019847)     is_shared=False), non_tensor_batch={'data_source': array(['wiki_qa', 'wiki_qa', 'wiki_qa', 'wiki_qa'], dtype=object), 'ability': array(['wiki', 'wiki', 'wiki', 'wiki'], dtype=object), 'reward_model': array([{'ground_truth': array(['Ginnifer Goodwin'], dtype=object), 'style': 'rule'},

@@ -1,7 +1,6 @@
 from verl.workers.fsdp_workers import ActorRolloutRefWorker, Worker, DictConfig
 from verl.workers.fsdp_workers import *
-from verl.single_controller.base.decorator import Execute, collect_all_to_all
-from functools import partial
+from verl.utils.debug.performance import _timer
 from ..llm_agent.config import AgentActorConfig
 from ..llm_agent.manager import AgentActorManager
 
@@ -90,22 +89,6 @@ def collect_dp_compute(worker_group, output):
     return output
 
 
-# # Create a decorator function
-# def extend_hello(original_method):
-#     def wrapped_method(self):
-#         original_method(self)  # Call the original
-#         print("Additional code added via decorator")
-#     return wrapped_method
-
-# def extend_generate_sequences(ori_gen_seq_func, agent_gen_seq_func):
-#     """
-#     This wraps the self.rollout.generate_sequences function with agent behavior.
-#     """
-#     def wrapped_method(self, prompts: DataProto, *args, **kwargs):
-#         if
-#         original_method(self
-#         print("Additional code added via decorator")
-#     return wrapped_method
 class AgentActorRolloutRefWorker(Worker, ActorRolloutRefWorker, metaclass=AgentActorRolloutRefWorkerMeta):
     def __agent_init__(self, config: DictConfig, role: str):
         self.config = config
@@ -123,44 +106,39 @@ class AgentActorRolloutRefWorker(Worker, ActorRolloutRefWorker, metaclass=AgentA
     @register(dispatch_mode=Dispatch.DP_COMPUTE_PROTO)
     def generate_sequences(self, prompts: DataProto):
         # Support all hardwares
-        prompts = prompts.to(torch.cuda.current_device())
+        prompts = prompts.to(get_device_id())
 
         assert self._is_rollout
-        if self._is_offload_param:
-            load_fsdp_model_to_gpu(self.actor_module_fsdp)
 
         meta_info = {
-            'eos_token_id':
-                self.generation_config.eos_token_id
-                if self.generation_config is not None else self.tokenizer.eos_token_id,
-            'pad_token_id':
-                self.generation_config.pad_token_id
-                if self.generation_config is not None else self.tokenizer.pad_token_id,
+            "eos_token_id": self.generation_config.eos_token_id if self.generation_config is not None else self.tokenizer.eos_token_id,
+            "pad_token_id": self.generation_config.pad_token_id if self.generation_config is not None else self.tokenizer.pad_token_id,
         }
         prompts.meta_info.update(meta_info)
+        timing_generate = {}
         with self.rollout_sharding_manager:
-
-            # after parameters sync with rollout, offload actor model to CPU
-            if self._is_offload_param:
-                offload_fsdp_model_to_cpu(self.actor_module_fsdp)
-            if self._is_offload_optimizer:
-                offload_fsdp_optimizer(optimizer=self.actor_optimizer)
-
-            log_gpu_memory_usage('After entering rollout sharding manager', logger=logger)
+            log_gpu_memory_usage("After entering rollout sharding manager", logger=logger)
 
             prompts = self.rollout_sharding_manager.preprocess_data(prompts)
-            if not self.agent_config.enable_agent:
-                # old behavior
-                output = self.rollout.generate_sequences(prompts=prompts)
-            else:
-                # agent behavior
-                output = self.manager.run_llm_loop(prompts) # our agent behavior
-            log_gpu_memory_usage('After rollout generation', logger=logger)
+            with _timer("generate_sequences", timing_generate):
+                if not self.agent_config.enable_agent:
+                    # old behavior
+                    output = self.rollout.generate_sequences(prompts=prompts)
+                else:
+                    # agent behavior
+                    output = self.manager.run_llm_loop(prompts) # our agent behavior
+
+            log_gpu_memory_usage("After rollout generation", logger=logger)
 
             output = self.rollout_sharding_manager.postprocess_data(output)
 
-        output = output.to('cpu')
+        timing_generate.update(self.rollout_sharding_manager.timing)
+        # We calculate the average timing across all ranks
+        # to make sure meta_info["timing"] is the same
+        timing_generate = reduce_timing(timing_generate)
+        output.meta_info["timing"] = timing_generate
+        output = output.to("cpu")
 
         # clear kv cache
-        log_gpu_memory_usage('After recompute log prob', logger=logger)
+        get_torch_device().empty_cache()
         return output

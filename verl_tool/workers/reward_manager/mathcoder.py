@@ -28,10 +28,8 @@ import torch
 from collections import defaultdict
 from verl import DataProto
 from verl.protocol import collate_fn
-from verl_tool.agent_workers.reward_manager.reward_score import _default_compute_score
-from verl_tool.agent_workers.reward_manager.reward_score.torl_math import (
-    compute_score as torl_compute_score,
-)
+from .reward_score import _default_compute_score
+from verl.workers.reward_manager import register
 
 def hash_string(s):
     return hashlib.sha256(s.encode()).hexdigest()
@@ -39,6 +37,7 @@ def hash_string(s):
 from .torl import ToRLRewardManager
 from .acecoder import AceCoderRewardManager
 
+@register("mathcoder")
 class MathCoderRewardManager:
     def __init__(
         self, tokenizer, num_examine, compute_score=None, reward_fn_key="data_source") -> None:

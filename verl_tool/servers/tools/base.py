@@ -3,6 +3,13 @@ from pathlib import Path
 from tqdm import tqdm
 registered_tools = {}
 ALL_TOOLS = []
+use_tqdm = True
+def set_use_tqdm(value: bool):
+    """
+    Set whether to use tqdm for progress bars.
+    """
+    global use_tqdm
+    use_tqdm = value
 
 def get_tool_cls(tool_type):
     if tool_type in ALL_TOOLS:
@@ -29,6 +36,7 @@ def register_tool(cls):
     tool_type = getattr(cls, 'tool_type', cls.__name__)
     registered_tools[tool_type] = cls
     return cls
+
 
 class BaseTool:
     tool_type = __name__
@@ -143,10 +151,19 @@ class BaseTool:
             dones: The list of done flags
             valids: The list of valid flags
         """
-        with ThreadPoolExecutor(max_workers=min(self.num_workers, len(trajectory_ids))) as executor:
-            results = list(tqdm(executor.map(self.conduct_action, trajectory_ids, actions, extra_fields),
-                                            total=len(trajectory_ids), desc=f"Getting observations using tool {self.tool_type}", 
-                                            disable=False))
+        if len(trajectory_ids) <= 4: # heuristic to use single-threaded execution for small number of trajectories
+            results = []
+            for i in tqdm(range(len(trajectory_ids)), desc=f"Getting observations using tool {self.tool_type}", disable=not use_tqdm):
+                trajectory_id = trajectory_ids[i]
+                action = actions[i]
+                extra_field = extra_fields[i]
+                results.append(self.conduct_action(trajectory_id, action, extra_field))
+        else:
+            with ThreadPoolExecutor(max_workers=min(self.num_workers, len(trajectory_ids))) as executor:
+                results = list(tqdm(executor.map(self.conduct_action, trajectory_ids, actions, extra_fields),
+                                                total=len(trajectory_ids), desc=f"Getting observations using tool {self.tool_type}", 
+                                                disable=not use_tqdm))
+        
         for i in range(len(trajectory_ids)):
             if extra_fields[i].get('is_last_step', False):
                 self.delete_env(trajectory_ids[i])

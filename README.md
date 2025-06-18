@@ -56,6 +56,8 @@ VerlTool: A unified and easy-to-extend tool-agent training framework based on ve
 
 
 ## News
++ [2025/06/18] VerlTool now officially supports Trajectory-Level asynchronous, speeding up the rollout generation with tool calling by at least 2x! see [asyncRL.md](./assets/docs/asyncRL.md) for more details.
++ [2024/06/16] We have updated the verl submodule to the latest version (06/16) and modified some code to adapt to the new version.
 + [2025/06/13] We integrated [DeepWiki](https://deepwiki.com/TIGER-AI-Lab/verl-tool) for Verl-Tool. Feel free to browse the AI-generated docs and chat with Verl-tool codes.
 + [2025/06/06] We have updated a detailed design overview in the README, including how to add new tools, how to use the tool server, and how to train your own models with verl-tool.
 + [2025/05/31] We released the Verl-tool training/evaluation code with ToRL training as an initial example (see [X post](https://x.com/DongfuJiang/status/1929198238017720379)). We are working on the paper and will release it very soon.
@@ -74,15 +76,13 @@ VerlTool: A unified and easy-to-extend tool-agent training framework based on ve
 We highly recommend using uv to install verl-tool.
 
 ```bash
+# install uv if not installed first
 git submodule update --init --recursive
-pip install uv # if not installed
 uv sync
 source .venv/bin/activate
 uv pip install -e verl
-uv pip install vllm==0.8.4
-uv pip install flash-attn --no-build-isolation
-uv pip install -e ".[acecoder,torl]"
-uv pip install dill==0.4.0 fsspec==2025.3.2 protobuf==5.29.4
+uv pip install -e ".[vllm,acecoder,torl]"
+uv pip install "flash-attn<2.8.0" --no-build-isolation
 ```
 
 ### Conda Installation
@@ -90,14 +90,9 @@ uv pip install dill==0.4.0 fsspec==2025.3.2 protobuf==5.29.4
 git submodule update --init --recursive
 conda create --name verl-tool-env python=3.10
 conda activate verl-tool-env
-pip install -e .
 pip install -e verl
-pip install vllm==0.8.4
-pip install flash-attn --no-build-isolation
-pip install -e ".[acecoder,torl]"
-pip install dill==0.4.0
-pip install fsspec==2025.3.2
-pip install protobuf==5.29.4
+pip install -e ".[vllm,acecoder,torl]"
+pip install "flash-attn<2.8.0" --no-build-isolation
 ```
 
 ## Design and Architecture
@@ -106,7 +101,7 @@ pip install protobuf==5.29.4
 
 Verl-Tool is designed to decouple the RL training and the tool calling processes. The RL training components (computation of logp, reward, advantages, RL algorithms, etc.) are handled by the verl framework, while the tool calling process is managed by the tool server **through an additional plugin to the verl rollout**.
 
-We achieve this by inheriting from `ActorRolloutRefWorker` → `AgentActorRolloutRefWorker` in [verl_tool/agent_workers/fsdp_workers.py](verl_tool/agent_workers/fsdp_workers.py) and then overriding the original RefWorker in [verl_tool/trainer/main_ppo](verl_tool/trainer/main_ppo.py) by adding this line:
+We achieve this by inheriting from `ActorRolloutRefWorker` → `AgentActorRolloutRefWorker` in [verl_tool/worker/fsdp_workers.py](verl_tool/worker/fsdp_workers.py) and then overriding the original RefWorker in [verl_tool/trainer/main_ppo](verl_tool/trainer/main_ppo.py) by adding this line:
 
 ```python
 from verl_tool.trainer.ppo.ray_trainer import AgentRayPPOTrainer as RayPPOTrainer
@@ -340,7 +335,7 @@ ray start --address='head_node_ip:6379' --block # start ray worker node
 
 ### Training Logs
 
-During training, the generated responses, rewards, etc., of each step are recorded in the `verl_step_records` directory. The corresponding code logic is written in the `verl_tool/agent_workers/reward_manager/{reward_manager_name}.py` file. This helps you debug the training process and understand how the model interacts with the tool server.
+During training, the generated responses, rewards, etc., of each step are recorded in the `verl_step_records` directory. The corresponding code logic is written in the `verl_tool/worker/reward_manager/{reward_manager_name}.py` file. This helps you debug the training process and understand how the model interacts with the tool server.
 
 ## Evaluation
 
@@ -356,7 +351,7 @@ Content of `eval_service/scripts/start_api_service.sh`:
 ```bash
 #!/bin/bash
 set -x
-# 1. Start ray server
+# 1. Start Tool Server
 host=0.0.0.0
 port=$(shuf -i 30000-31000 -n 1)
 tool_server_url=http://$host:$port/get_observation
@@ -502,7 +497,7 @@ The polar coordinates for the point $(0,3)$ are $(3.0, \frac{\pi}{2})$. Therefor
 |TORL-7B    |✅        |92.70|82.20   |33.50        |49.90          |43.30           |65.00|61.10|
 |**Qwen-2.5-Math-7B + Verl-Tool**           |✅        |**91.40**|**83.40**|**29.80**    |**50.20**      |**40.00**       |**72.50**|**61.22**|
 
-## Model Checkpoints 
+### Model Checkpoints 
 
 All these models are available in our [Huggingface Collection](https://huggingface.co/VerlTool).
 
@@ -510,6 +505,15 @@ All these models are available in our [Huggingface Collection](https://huggingfa
 |-|-|-|
 |Qwen-2.5-Math-1.5B-Verl-tool|[🤗](https://huggingface.co/VerlTool/torl-deep_math-fsdp_agent-qwen2.5-math-1.5b-grpo-n16-b128-t1.0-lr1e-6-320-step)|[📈](https://wandb.ai/1004271927-SHU/Verl-Tool-Math?nw=nwuser1004271927)|
 |Qwen-2.5-Math-7B-Verl-tool|[🤗](https://huggingface.co/VerlTool/torl-deep_math-fsdp_agent-qwen2.5-math-7b-grpo-n16-b128-t1.0-lr1e-6-310-step)|[📈](https://wandb.ai/1004271927-SHU/Verl-Tool-Math?nw=nwuser1004271927)|
+
+## Updating verl version
+To update the verl submodule to the latest version, run the following commands in the verl-tool root directory:
+```bash
+cd verl && git pull origin main && cd ..
+cp -r verl/verl/trainer/config/* ./verl_tool/trainer/config/
+uv pip install -e verl
+```
+Note there might be some small parameters needed to remove the '+' prefix in the training script because default values may be added to the new config files.
 
 ## Contributing
 
@@ -519,7 +523,7 @@ Go to the [./verl_tool/servers/tools](./verl_tool/servers/tools) directory. Each
 
 ### Creating New Reward Managers
 
-Go to the [`./verl_tool/agent_workers/reward_manager`](./verl_tool/agent_workers/reward_manager) directory and add your new reward manager. Then, make sure to update the `verl_tool/trainer/main_ppo.py` file to include your new reward manager.
+Go to the [`./verl_tool/worker/reward_manager`](./verl_tool/worker/reward_manager) directory and add your new reward manager. Then, make sure to update the `verl_tool/trainer/main_ppo.py` file to include your new reward manager.
 
 ## ToDos  
 - [ ] Async rollout and tool interaction for each trajectory using VLLM and SGLang

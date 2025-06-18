@@ -26,6 +26,7 @@ from .reward_score import _default_compute_score
 import asyncio
 from verl.utils.reward_score.prime_code import compute_score as prime_code_compute_score
 from verl.workers.reward_manager.prime import parallel_compute_score_async
+from verl.workers.reward_manager import register
 
 import hashlib
 import random
@@ -108,6 +109,7 @@ def prime_code_compute_score_async(data_source, solution_str, ground_truth, extr
     else:
         return float(res[0])
 
+@register("acecoder")
 class AceCoderRewardManager:
     """
     The Reward Manager used in https://github.com/TIGER-AI-Lab/AceCoder

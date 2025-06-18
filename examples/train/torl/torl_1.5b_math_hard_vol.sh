@@ -18,7 +18,7 @@ entropy_coeff=0
 host=0.0.0.0
 port=30268
 tool_server_url=http://$host:$port/get_observation
-# python -m verl_tool.servers.ray_serve --host $host --port $port --tool_type "python_code" --workers_per_tool 64 &
+# python -m verl_tool.servers.serve --host $host --port $port --tool_type "python_code" --workers_per_tool 64 &
 server_pid=$!
 echo "Server (pid=$server_pid) started at $tool_server_url"
 max_obs_length=512
