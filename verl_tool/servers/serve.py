@@ -14,6 +14,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from .utils import hash_requests
 from collections import defaultdict
+import json
 
 from .tools import get_tool_cls, ALL_TOOLS, set_use_tqdm
 
@@ -322,6 +323,7 @@ class AsyncToolServer:
                 data = await request.json()
                 data_hash_str = hash_requests(data)
                 logger.debug(f"Request hash: {data_hash_str}")
+                print(f"\n[DEBUG] Tool server received request data: {json.dumps(data, indent=2)}")
                 
                 # Check if this request is already being processed
                 if data_hash_str in self.processing_tasks:
@@ -350,20 +352,25 @@ class AsyncToolServer:
                         # Validate and process request
                         trajectory_ids = data.get("trajectory_ids", [])
                         actions = data.get("actions", [])
+                        print(f"\n[DEBUG] Processing extra_fields:")
                         if 'extra_fields' in data.keys():
                             extra_fields = data['extra_fields']
+                            print(f"[DEBUG] Found extra_fields in data: {json.dumps(extra_fields, indent=2)}")
                             for key in data.keys():
                                 assert len(data[key]) == len(trajectory_ids), f"Length of {key} ({len(data[key])}) does not match trajectory_ids ({len(trajectory_ids)})"
                                 if key not in ["trajectory_ids", "actions", "extra_fields"]:
+                                    print(f"[DEBUG] Adding {key} to extra_fields")
                                     for i in range(len(trajectory_ids)):
                                         extra_fields[i][key] = data[key][i]
                             assert len(extra_fields) == len(trajectory_ids), f"Length of extra_fields ({len(extra_fields)}) does not match trajectory_ids ({len(trajectory_ids)})"
                         else:
+                            print("[DEBUG] No extra_fields in data, constructing from other keys")
                             extra_keys = [k for k in data.keys() if k not in ["trajectory_ids", "actions"]]
                             extra_fields = [
                                 {key: data[key][i] for key in extra_keys} 
                                 for i in range(len(trajectory_ids))
                             ]
+                        print(f"[DEBUG] Final extra_fields being sent to tool: {json.dumps(extra_fields, indent=2)}")
                         
                         observations, dones, valids = await self.tool_manager.process_actions(
                             trajectory_ids,

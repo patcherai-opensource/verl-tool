@@ -15,7 +15,7 @@ from model_service import ModelService
 
 # Set up logging
 logging.basicConfig(
-    level=logging.ERROR,
+    level=logging.INFO,  # Change to INFO to see more logs
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     handlers=[
         logging.FileHandler("error_log.txt"),
@@ -65,31 +65,17 @@ def create_app(server_config: ServerConfig, model_config: ModelConfig, tool_conf
     # Add middleware for global exception handling
     @app.middleware("http")
     async def log_exceptions(request: Request, call_next):
+        logger.info(f"Received request to {request.url.path}")
         try:
-            return await call_next(request)
+            response = await call_next(request)
+            logger.info(f"Successfully processed request to {request.url.path}")
+            return response
         except Exception as e:
             error_details = traceback.format_exc()
             logger.error(f"Unhandled exception: {str(e)}\n{error_details}")
             raise
     
     @app.post("/completions")
-    async def chat_completions(request: Request):
-        """
-        Chat completion API endpoint compatible with OpenAI
-        
-        Processes chat messages and returns model-generated responses with tool calling capabilities
-        """
-        try:
-            request_body = await request.json()
-            logger.debug(f"Received completions request: {json.dumps(request_body)}")
-            response = await app.state.model_service.completions_async(request_body)
-            return response
-        except Exception as e:
-            error_details = traceback.format_exc()
-            logger.error(f"Error in completions endpoint: {str(e)}\n{error_details}")
-            raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
-    
-    @app.post("/chat/completions")
     async def completions(request: Request):
         """
         Chat completion API endpoint compatible with OpenAI
@@ -98,9 +84,105 @@ def create_app(server_config: ServerConfig, model_config: ModelConfig, tool_conf
         """
         try:
             request_body = await request.json()
-            logger.debug(f"Received chat completions request: {json.dumps(request_body)}")
-            response = await app.state.model_service.chat_completions_async(request_body)
+            logger.info(f"Received completions request: {json.dumps(request_body)}")
+            response = await app.state.model_service.completions_async(request_body)
+            logger.info("Successfully processed completions request")
             return response
+        except Exception as e:
+            error_details = traceback.format_exc()
+            logger.error(f"Error in completions endpoint: {str(e)}\n{error_details}")
+            raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
+    
+    @app.post("/chat/completions/legacy")
+    async def chat_completions_legacy(request: Request):
+        """
+        Legacy chat completion API endpoint compatible with OpenAI
+        
+        Processes chat messages and returns model-generated responses with tool calling capabilities.
+        This is the legacy implementation that does not properly handle multi-turn conversations.
+        """
+        try:
+            # Add more detailed logging around request body parsing
+            logger.info("Attempting to parse request body")
+            try:
+                request_body = await request.json()
+            except Exception as e:
+                logger.error(f"Failed to parse request body as JSON: {str(e)}")
+                raise HTTPException(status_code=400, detail=f"Invalid JSON in request body: {str(e)}")
+
+            if not request_body:
+                logger.error("Request body is empty or None")
+                raise HTTPException(status_code=400, detail="Request body cannot be empty")
+
+            print(f"\n[DEBUG] Raw request body received: {json.dumps(request_body, indent=2)}")
+            print(f"[DEBUG] Request body keys: {list(request_body.keys())}")
+            print(f"[DEBUG] Request body type: {type(request_body)}")
+            
+            # Check if extra_body is in the raw request
+            if "extra_body" in request_body:
+                print(f"[DEBUG] extra_body contents: {json.dumps(request_body['extra_body'], indent=2)}")
+            else:
+                print("[DEBUG] extra_body not found in request")
+                # Check if it's nested somewhere else
+                print(f"[DEBUG] Full request structure: {json.dumps(request_body, indent=2)}")
+
+            logger.info(f"Received chat completions request: {json.dumps(request_body)}")
+            
+            # Validate required fields
+            if "messages" not in request_body:
+                logger.error("'messages' field missing from request body")
+                raise HTTPException(status_code=400, detail="'messages' field is required")
+                
+            if "model" not in request_body:
+                logger.error("'model' field missing from request body")
+                raise HTTPException(status_code=400, detail="'model' field is required")
+
+            response = await app.state.model_service.chat_completions_async(request_body)
+            logger.info("Successfully processed chat completions request")
+            return response
+        except HTTPException:
+            raise
+        except Exception as e:
+            error_details = traceback.format_exc()
+            logger.error(f"Error in chat completions endpoint: {str(e)}\n{error_details}")
+            raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
+
+    @app.post("/chat/completions")
+    async def chat_completions_multi_turn(request: Request):
+        """
+        Chat completion API endpoint compatible with OpenAI
+        
+        Processes chat messages and returns model-generated responses with tool calling capabilities.
+        This implementation properly handles multi-turn conversations and tool interactions.
+        """
+        try:
+            # Parse and validate request body
+            try:
+                request_body = await request.json()
+            except Exception as e:
+                logger.error(f"Failed to parse request body as JSON: {str(e)}")
+                raise HTTPException(status_code=400, detail=f"Invalid JSON in request body: {str(e)}")
+
+            if not request_body:
+                logger.error("Request body is empty or None")
+                raise HTTPException(status_code=400, detail="Request body cannot be empty")
+
+            # Validate required fields
+            if "messages" not in request_body:
+                logger.error("'messages' field missing from request body")
+                raise HTTPException(status_code=400, detail="'messages' field is required")
+                
+            if "model" not in request_body:
+                logger.error("'model' field missing from request body")
+                raise HTTPException(status_code=400, detail="'model' field is required")
+
+            print(f"\n[DEBUG] Chat request received: {json.dumps(request_body, indent=2)}")
+            
+            response = await app.state.model_service.chat_completions_multi_turn_async(request_body)
+            logger.info("Successfully processed chat completions request")
+            return response
+        except HTTPException:
+            raise
         except Exception as e:
             error_details = traceback.format_exc()
             logger.error(f"Error in chat completions endpoint: {str(e)}\n{error_details}")
@@ -109,6 +191,7 @@ def create_app(server_config: ServerConfig, model_config: ModelConfig, tool_conf
     @app.get("/health")
     async def health_check():
         """Health check endpoint to verify service availability"""
+        logger.info("Health check requested")
         return {"status": "healthy"}
     
     return app

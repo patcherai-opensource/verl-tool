@@ -1,6 +1,7 @@
 from .base import BaseTool, register_tool
 import docker
 import asyncio
+import re
 import json
 from lib.llm_tools.shell_tool import ShellTool, ShellToolArgs
 from lib.llm_tools.tools import find_xml_blocks
@@ -11,7 +12,7 @@ from lib.execenv.execenv import ExecEnvParameters, DockerExecEnv, start_containe
 @register_tool
 class VmsShellTool(BaseTool):
     tool_type = "vms_shell_tool"
-    stop_tokens = [] # TODO: ["```output", "<o>", "<tool_call>"]
+    stop_tokens = [] # NOTE: not needed for "multi-turn" style tool interaction
     # TODO: make configurable
     command_timeout_seconds = 60
 
@@ -71,23 +72,31 @@ class VmsShellTool(BaseTool):
             del self.env_cache[trajectory_id]
 
     def parse_action(self, action: str):
+        print(f"Parsing action:\n\n{action}\n\n")
+        # Strip out <think>...</think> blocks
+        action = re.sub(r"<think>(.*?)</think>", "", action, flags=re.DOTALL).strip()
+        print(f"After stripping <think>...</think> blocks:\n\n{action}\n\n")
         # Only look for a single <shell_tool>...</shell_tool> block
         match = next(find_xml_blocks(action, "shell_tool"), None)
         if not match:
             return "", False
         parsed_command = match.group(1).strip()
+        print(f"Parsed command:\n\n{parsed_command}\n\n")
         return parsed_command, True
 
     async def _get_or_create_session(self, trajectory_id, extra_field):
         if trajectory_id in self.sessions:
             return self.sessions[trajectory_id]
         # 1. Deserialize RepositoryReference from extra_field
+        print(f"\n[DEBUG] VmsShellTool extra_field contents: {json.dumps(extra_field, indent=2)}")
         repo_ref_json = extra_field.get("repository_reference")
+        print(f"[DEBUG] Extracted repo_ref_json: {repo_ref_json}")
         if isinstance(repo_ref_json, str):
             # FIXME: only use one of these, just not sure if it's a string or a dict yet
             repo_ref_dict = json.loads(repo_ref_json)
         else:
             repo_ref_dict = repo_ref_json
+        print(f"[DEBUG] Final repo_ref_dict: {repo_ref_dict}")
         repo_ref = RepositoryReference(**repo_ref_dict)
         # 2. Create RunPaths
         run_paths = RunPaths.new(repo_ref)

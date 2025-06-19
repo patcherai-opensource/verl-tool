@@ -1,6 +1,6 @@
 import os
 from typing import Optional, List, Dict, Any, Union
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 @dataclass
 class ModelConfig:
@@ -15,12 +15,13 @@ class ToolConfig:
     tool_server_url: str = "http://localhost:30150/get_observation"
     max_turns: int = 5  # max generation turns
     truncate_obs_side: str = "left"  # "left" or "right", which side to truncate when the observation is too long
-    action_stop_tokens: str = None
+    action_stop_tokens: str | None = None  # tokens that stop generation when encountered
     max_obs_length: int = 512  # maximum length of observation
     enable_mtrl: bool=False
     mtrl_sep: str=None # "\n<|im_start|>system\n{obs}<|im_end|>\n<|im_start|>assistant\n"
     turn_end_token: str="<|im_end|>"
     min_turns: int=0
+    mtrl_tool_indicator_token: str | None = None  # token that indicates a tool call in MTRL mode without stopping generation
     
     def post_init(self):
         """
