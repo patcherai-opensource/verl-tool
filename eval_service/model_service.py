@@ -6,13 +6,22 @@ import regex as re
 import openai
 import os
 import torch
+import logging
 from vllm import SamplingParams
-from typing import Dict, Any, List, Tuple
+from typing import Dict, Any, List, Tuple, Optional
 from config import ModelConfig, ToolConfig
 from transformers import AutoTokenizer
 import asyncio
 import random
 import subprocess
+import json
+
+# Set up logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
 
 # 1) A sanitizer that strips all embedded NULs (and, optionally, any
 #    other C0 control characters except common whitespace).
@@ -165,27 +174,54 @@ class ModelService:
             )
             return next_obs
     
-    async def _postprocess_responses(self, outputs: torch.Tensor, action_step: int) -> torch.Tensor:
+    async def _postprocess_responses(self, outputs: Any, action_step: int) -> Tuple[List[str], List[bool], List[str]]:
         """Process responses to stop at python operation or answer operation."""
         active_responses = [outputs.choices[i].text for i in range(len(outputs.choices))]
         active_finish_reasons = [outputs.choices[i].finish_reason for i in range(len(outputs.choices))]
         
+        print(f"\n[DEBUG] Processing responses for action_step {action_step}:")
+        print(f"[DEBUG] MTRL enabled: {self.tool_config.enable_mtrl}")
+        print(f"[DEBUG] Action stop tokens: {self.tool_config.action_stop_tokens}")
+        print(f"[DEBUG] MTRL tool indicator: {self.tool_config.mtrl_tool_indicator_token}")
+        
         finishes = []
         for i in range(len(active_responses)):
+            print(f"\n[DEBUG] Processing response {i}:")
+            print(f"[DEBUG] Response text: {active_responses[i]}")
+            print(f"[DEBUG] Finish reason: {active_finish_reasons[i]}")
+            print(f"[DEBUG] Stop reason type: {type(outputs.choices[i].stop_reason)}")
+            print(f"[DEBUG] Stop reason value: {outputs.choices[i].stop_reason}")
+            
             finish = True
+            has_tool_call = False
+            
+            # In MTRL mode, check for tool indicator without stopping generation
+            if self.tool_config.enable_mtrl and self.tool_config.mtrl_tool_indicator_token:
+                # Strip <think> blocks from response before checking for tool indicator
+                response_without_think = re.sub(r"<think>(.*?)</think>", "", active_responses[i], flags=re.DOTALL).strip()
+                has_tool_call = self.tool_config.mtrl_tool_indicator_token in response_without_think
+                print(f"[DEBUG] Has tool call: {has_tool_call}")
+                
             if active_finish_reasons[i] == "stop" and outputs.choices[i].stop_reason is not None:
-                active_responses[i] = active_responses[i] + outputs.choices[i].stop_reason
+                # NOTE: Removed concatenation of stop_reason as it's meant to be metadata, not response content
+                # Previously: active_responses[i] = active_responses[i] + outputs.choices[i].stop_reason
                 if self.tool_config.enable_mtrl:
                     active_responses[i] += self.tool_config.turn_end_token
                 finish = False
-            if finish and self.tool_config.min_turns > action_step:
+            
+            # If we haven't reached min_turns or found a tool call in MTRL mode, continue
+            if (finish and self.tool_config.min_turns > action_step) or (self.tool_config.enable_mtrl and has_tool_call):
+                print(f"[DEBUG] Setting finish=False due to min_turns={self.tool_config.min_turns} or has_tool_call={has_tool_call}")
                 finish = False
                 if self.tool_config.enable_mtrl:
                     if self.tool_config.action_stop_tokens:
                         # add action stop tokens
                         active_responses[i] += self.tool_config.action_stop_tokens[0]
                     active_responses[i] += self.tool_config.turn_end_token
+            
             finishes.append(finish)
+            print(f"[DEBUG] Final finish value: {finish}")
+            
         return active_responses, finishes, active_finish_reasons
         
     def load_model(self):
@@ -277,25 +313,36 @@ class ModelService:
         )
         return response
     
-    async def generate_with_tools(self, prompts: List[str], sampling_params: dict) -> Tuple[List[str], List[str]]:
+    async def generate_with_tools(self, prompts: List[str], sampling_params: dict, extra_info: Optional[List[Dict[str, Any]]] = None) -> Tuple[List[str], List[str]]:
         """
         Generate text with tool calls in a multi-turn loop.
         
         Args:
             prompts: Initial prompts for generation
             sampling_params: Sampling parameters for the model
+            extra_info: Optional list of extra information to pass to the tool server, one per prompt.
+                       Must be the same length as prompts if provided.
             
         Returns:
             Tuple of (full_responses, finish_reasons)
         """
+        print(f"\n[DEBUG] generate_with_tools called with extra_info: {json.dumps(extra_info, indent=2)}")
         client = random.choice(self.clients) # ensure the same trajectory uses the same client for prefix caching
         assert sampling_params.get("n", 1) <= 1, "n > 1 is not supported yet for tool generation"
-        contexts = prompts
+        
+        if extra_info is not None:
+            assert len(extra_info) == len(prompts), f"Length of extra_info ({len(extra_info)}) must match length of prompts ({len(prompts)})"
+        
+        contexts = prompts.copy()
         final_responses = ["" for _ in range(len(prompts))]
         traj_ids = [str(uuid.uuid4()) for _ in range(len(prompts))]
         active_masks = [True for _ in range(len(prompts))]
-        finish_reasons = [None for _ in range(len(prompts))]
+        finish_reasons = ["" for _ in range(len(prompts))]  # Initialize with empty strings instead of None
         model = self.model_config.model
+        
+        # Use extra_info directly as it's already a list
+        extra_fields_list = extra_info
+        print(f"[DEBUG] Using extra_fields_list: {json.dumps(extra_fields_list, indent=2)}")
         
         # keep trying to generate the response until reached the tool-calling limit
         for action_step in range(self.tool_config.max_turns+1):
@@ -321,12 +368,24 @@ class ModelService:
             )
             active_responses, finishes, active_finish_reasons = await self._postprocess_responses(outputs, action_step)
             
+            # Get active extra_fields if available
+            active_extra_fields = None
+            if extra_fields_list:
+                active_extra_fields = [extra_fields_list[i] for i in range(len(extra_fields_list)) if active_masks[i]]
+                print(f"[DEBUG] Active extra_fields for step {action_step}: {json.dumps(active_extra_fields, indent=2)}")
+            
             # Use async tool server call if possible
+            tool_server_kwargs = {}
+            if active_extra_fields:
+                tool_server_kwargs["extra_fields"] = active_extra_fields
+                print(f"[DEBUG] Sending to tool server with kwargs: {json.dumps(tool_server_kwargs, indent=2)}")
+                
             if hasattr(self, 'call_tool_server_async'):
                 tool_responses = await self.call_tool_server_async(
                     active_traj_ids,
                     active_responses,
-                    finishes
+                    finishes,
+                    **tool_server_kwargs
                 )
             else:
                 # Fallback to sync version but run in executor
@@ -335,7 +394,8 @@ class ModelService:
                     self.call_tool_server,
                     active_traj_ids,
                     active_responses,
-                    finishes
+                    finishes,
+                    **tool_server_kwargs
                 )
                 
             # print(f"Active observations (preprocess): {tool_responses['observations']}")
@@ -364,34 +424,79 @@ class ModelService:
     
     async def chat_completions_async(self, body: Dict[str, Any]) -> Dict[str, Any]:
         """process API request and generate response"""
-        # print(f"Received request: {body}")
+        logger.info("Starting chat_completions_async")
         
-        if "messages" not in body or not body["messages"]:
-            raise ValueError("No messages found in the request.")
-        if not 'user' in [message["role"] for message in body["messages"]]:
+        # Validate body is not None
+        if body is None:
+            logger.error("Request body is None")
+            raise ValueError("Request body cannot be None")
+            
+        # Validate messages field
+        if not isinstance(body, dict):
+            logger.error(f"Request body is not a dictionary, got {type(body)}")
+            raise ValueError("Request body must be a dictionary")
+            
+        if "messages" not in body:
+            logger.error("No messages field in request body")
+            raise ValueError("No messages field in the request.")
+            
+        if not isinstance(body["messages"], list):
+            logger.error(f"Messages field is not a list, got {type(body['messages'])}")
+            raise ValueError("Messages field must be a list")
+            
+        if not body["messages"]:
+            logger.error("Messages list is empty")
+            raise ValueError("Messages list cannot be empty")
+            
+        if not any(message.get("role") == "user" for message in body["messages"]):
+            logger.error("No user message found in messages")
             raise ValueError("No user message found in the request.")
         
+        logger.info(f"Model check: request={body.get('model')}, config={self.model_config.model}")
+        if "model" not in body:
+            logger.error("No model field in request body")
+            raise ValueError("No model field in the request.")
+            
         assert body["model"] == self.model_config.model, f"model mismatch: {body['model']} != {self.model_config.model}"
         
+        logger.info("Applying chat template")
         async with self.encode_lock:
             prompt = self.tokenizer.apply_chat_template(body['messages'],
                                                     add_generation_prompt=True,
                                                     tokenize=False)
-        if body.get('n', 1) > 1:
-            prompts = [prompt for _ in range(body["n"])]
+        n = body.get('n', 1)
+        if n > 1:
+            prompts = [prompt for _ in range(n)]
         else:
             prompts = [prompt]
 
+        logger.info("Setting up sampling parameters")
         sampling_params = {
             "temperature": body.get("temperature", 1.0),
             "max_tokens": body.get("max_tokens", body.get("max_completion_tokens", 512)),
             "top_p": body.get("top_p", 1.0),
-            "stop": list(set(body.get("stop", []) + self.tool_config.action_stop_tokens)),
+            "stop": list(set((body.get("stop") or []) + (self.tool_config.action_stop_tokens or []))),
         }
 
-        # print(f"Sampling params: {sampling_params}")
-        all_responses, finish_reasons = await self.generate_with_tools(prompts, sampling_params)
+        # Get extra_infos from request body
+        extra_info = None
+        if "extra_infos" in body:
+            logger.info(f"Processing extra_infos: {json.dumps(body['extra_infos'])}")
+            extra_infos = body["extra_infos"]
+            
+            if not isinstance(extra_infos, list):
+                logger.error("extra_infos is not a list")
+                raise ValueError("extra_infos must be a list of dictionaries, one per prompt")
+            if len(extra_infos) != n:
+                logger.error(f"extra_infos length mismatch: got {len(extra_infos)}, expected {n}")
+                raise ValueError(f"Length of extra_infos ({len(extra_infos)}) must match n ({n})")
+            
+            extra_info = extra_infos
+
+        logger.info("Calling generate_with_tools")
+        all_responses, finish_reasons = await self.generate_with_tools(prompts, sampling_params, extra_info)
         
+        logger.info("Computing token counts")
         async with self.encode_lock:
             prompt_tokens = len(self.tokenizer.encode(prompt))
             completion_tokens = 0
@@ -399,8 +504,8 @@ class ModelService:
                 completion_tokens += len(self.tokenizer.encode(response))
             total_tokens = prompt_tokens + completion_tokens
         
-        # format the response into OpenAI-compliant format
-        return {
+        logger.info("Formatting response")
+        response = {
             "id": f"chatcmpl-{str(uuid.uuid4())}",
             "object": "chat.completion",
             "created": int(time.time()),
@@ -421,6 +526,8 @@ class ModelService:
                 "total_tokens": total_tokens
             } 
         }
+        logger.info("Completed chat_completions_async successfully")
+        return response
     
     def chat_completions(self, body: Dict[str, Any]) -> Dict[str, Any]:
         """Synchronous wrapper for chat_completions"""
@@ -505,3 +612,163 @@ class ModelService:
         except RuntimeError:
             # Handle "Event loop is closed" error that can happen during shutdown
             pass
+
+    async def chat_completions_multi_turn_async(self, body: Dict[str, Any]) -> Dict[str, Any]:
+        """Process multi-turn chat completions with tool calling in a cleaner way.
+        
+        This implementation:
+        1. Always uses chat messages as the core data structure
+        2. Uses tokenizer.apply_chat_template for consistent prompt formatting
+        3. Handles tool calls by appending system messages with observations
+        """
+        logger.info("Starting chat_completions_multi_turn_async")
+        
+        # Validate and extract messages
+        messages = body.get("messages", [])
+        if not messages:
+            raise ValueError("No messages found in the request.")
+            
+        # Extract sampling parameters
+        sampling_params = {
+            "temperature": body.get("temperature", 1.0),
+            "max_tokens": body.get("max_tokens", body.get("max_completion_tokens", 512)),
+            "top_p": body.get("top_p", 1.0),
+            "stop": body.get("stop", []),
+        }
+
+        # Get extra_infos if present
+        extra_info = None
+        if "extra_infos" in body:
+            logger.info(f"Processing extra_infos: {json.dumps(body['extra_infos'])}")
+            extra_infos = body["extra_infos"]
+            
+            if not isinstance(extra_infos, list):
+                logger.error("extra_infos is not a list")
+                raise ValueError("extra_infos must be a list of dictionaries, one per prompt")
+            
+            extra_info = extra_infos
+
+        # Initialize response tracking
+        cumulative_messages = messages.copy()
+        finish_reason = None
+        
+        # Create a single trajectory ID for all turns
+        trajectory_id = str(uuid.uuid4())
+        
+        # Select a random client for consistent caching
+        client = random.choice(self.clients)
+        
+        for turn in range(self.tool_config.max_turns):
+            print(f"\n[DEBUG] Processing turn {turn}")
+            
+            # 1. Convert messages to prompt using chat template
+            prompt = self.tokenizer.apply_chat_template(
+                cumulative_messages,
+                tokenize=False,
+                add_generation_prompt=True
+            )
+            
+            # 2. Get model response
+            outputs = await self.send_request(
+                client,
+                [prompt],
+                self.model_config.model,
+                sampling_params
+            )
+            
+            if not hasattr(outputs, 'choices') or not outputs.choices:
+                raise ValueError("No choices in model output")
+                
+            # Get response text
+            response_text = outputs.choices[0].text
+            
+            # 3. Check for tool calls
+            response_without_think = re.sub(r"<think>(.*?)</think>", "", response_text, flags=re.DOTALL).strip()
+            has_tool_call = (
+                self.tool_config.mtrl_tool_indicator_token is not None 
+                and self.tool_config.mtrl_tool_indicator_token in response_without_think
+            )
+            
+            if has_tool_call:
+                # 4. Call tool server
+                tool_kwargs = {}
+                if extra_info and isinstance(extra_info, list) and len(extra_info) > 0:
+                    tool_kwargs["extra_fields"] = extra_info
+                
+                tool_response = await self.call_tool_server_async(
+                    [trajectory_id],
+                    [response_text],
+                    [False],
+                    **tool_kwargs
+                )
+                
+                # First append the assistant's response
+                cumulative_messages.append({
+                    "role": "assistant", 
+                    "content": response_text
+                })
+                
+                # 5. Then add tool response as user message
+                observation = tool_response["observations"][0]
+                done = tool_response["dones"][0]
+                
+                cumulative_messages.append({
+                    "role": "user",
+                    "content": observation
+                })
+                
+                if done:
+                    print("[DEBUG] Tool server indicated completion")
+                    finish_reason = "tool_completion"
+                    break
+                    
+                if turn == self.tool_config.max_turns - 1:
+                    print("[DEBUG] Reached maximum turns while using tools")
+                    finish_reason = "max_turns"
+            else:
+                # No tool call, add assistant response and end conversation
+                print("[DEBUG] No tool call detected, ending conversation")
+                cumulative_messages.append({
+                    "role": "assistant",
+                    "content": response_text
+                })
+                finish_reason = "assistant_completion"
+                break
+        
+        # Calculate token usage
+        async with self.encode_lock:
+            # Count tokens in initial messages
+            prompt_tokens = len(self.tokenizer.encode(
+                self.tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+            ))
+            # Count tokens in all messages added during the conversation
+            completion_tokens = sum(
+                len(self.tokenizer.encode(msg["content"]))
+                for msg in cumulative_messages[len(messages):]
+            )
+            total_tokens = prompt_tokens + completion_tokens
+        
+        # Format the response
+        response = {
+            "id": f"chatcmpl-{str(uuid.uuid4())}",
+            "object": "chat.completion",
+            "created": int(time.time()),
+            "model": self.model_config.model,
+            "choices": [{
+                "index": 0,
+                "message": {
+                    "role": "assistant",
+                    "content": cumulative_messages[-1]["content"]
+                },
+                "finish_reason": finish_reason
+            }],
+            "usage": {
+                "prompt_tokens": prompt_tokens,
+                "completion_tokens": completion_tokens,
+                "total_tokens": total_tokens
+            },
+            "conversation_history": cumulative_messages
+        }
+        
+        logger.info(f"Completed chat_completions_multi_turn_async successfully with finish_reason: {finish_reason}")
+        return response
